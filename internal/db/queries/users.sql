@@ -6,3 +6,9 @@ INSERT INTO
         user_fullname
     )
 VALUES ($1, $2, $3) RETURNING *;
+
+-- name: GetUserByEmail :one
+SELECT * FROM users WHERE user_email = $1;
+
+-- name: GetUserByUUID :one
+SELECT * FROM users WHERE user_uuid = $1;

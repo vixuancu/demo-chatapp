@@ -6,6 +6,7 @@ import (
 	"chat-app/internal/db/sqlc"
 	"chat-app/internal/routes"
 	"chat-app/internal/validation"
+	"chat-app/pkg/websocket"
 	"context"
 	"log"
 	"net/http"
@@ -21,12 +22,14 @@ type Module interface {
 	GetRoutes() routes.Routes
 }
 type Application struct {
-	config  *config.Config
-	router  *gin.Engine
-	modules []Module
+	config    *config.Config
+	router    *gin.Engine
+	modules   []Module
+	wsManager *websocket.Manager
 }
 type ModuleContext struct {
 	DB sqlc.Querier
+	WSManager *websocket.Manager
 }
 
 func NewApplication(cfg *config.Config) *Application {
@@ -37,13 +40,20 @@ func NewApplication(cfg *config.Config) *Application {
 	if err := db.InitDB(); err != nil {
 		log.Fatal("cannot connect to db:", err)
 	}
+	// Create and start WebSocket manager
+	wsManager := websocket.NewManager()
+	go wsManager.Run()
+
 
 	ctx := &ModuleContext{
 		DB: db.DB,
+		WSManager: wsManager,
 	}
 	modules := []Module{
 		NewUserModule(ctx),
 		// NewAuthModule(ctx),
+		NewRoomModule(ctx), // thêm module Room
+		NewChatModule(ctx),
 	}
 	routes.RegisterRoutes(r, GetModuleRoutes(modules)...)
 
@@ -51,6 +61,7 @@ func NewApplication(cfg *config.Config) *Application {
 		config:  cfg,
 		router:  r,
 		modules: modules,
+		wsManager: wsManager,
 	}
 }
 
@@ -75,7 +86,7 @@ func (app *Application) Run() error {
 	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP) // khi nhấn Ctrl+C hoặc dừng server hoắc reload
 
 	// Chạy server trong một goroutine vì để tránh blocking
-	
+
 	go func() {
 		log.Printf("❤️ Starting server on %s", app.config.ServerAddress)
 		if err := svr.ListenAndServe(); err != nil && err != http.ErrServerClosed {
