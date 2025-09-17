@@ -40,7 +40,7 @@ func generateRoomCode() (string, error) {
 }
 
 func (rs *roomService) CreateRoom(ctx *gin.Context, name string, isDirectChat bool, creatorUUID uuid.UUID) (sqlc.Room, error) {
-	context := ctx.Request.Context()
+	context := ctx.Request.Context() // Lấy context từ gin.Context
 
 	// Tạo mã phòng ngẫu nhiên
 	roomCode, err := generateRoomCode()
@@ -61,15 +61,11 @@ func (rs *roomService) CreateRoom(ctx *gin.Context, name string, isDirectChat bo
 	}
 
 	// Thêm người tạo vào phòng
-	// TODO: Implement AddRoomMember
-	// _, err = rs.roomRepo.AddRoomMember(context, sqlc.AddRoomMemberParams{
-	// 	UserUuid: creatorUUID,
-	// 	RoomID:   room.RoomID,
-	// })
+	_, err = rs.roomRepo.JoinRoom(context, creatorUUID, room.RoomID)
 
-	// if err != nil {
-	// 	return sqlc.Room{}, utils.WrapError(err, "could not add creator to room", utils.ErrorCodeInternalServer)
-	// }
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not add creator to room", utils.ErrorCodeInternalServer)
+	}
 
 	return room, nil
 }
@@ -84,59 +80,81 @@ func (rs *roomService) JoinRoom(ctx *gin.Context, roomCode string, userUUID uuid
 	}
 
 	// Kiểm tra xem người dùng đã trong phòng chưa
-	// TODO: Implement IsRoomMember check
-	// isMember, err := rs.roomRepo.IsRoomMember(context, sqlc.IsRoomMemberParams{
-	// 	UserUuid: userUUID,
-	// 	RoomID:   room.RoomID,
-	// })
+	isMember, err := rs.roomRepo.IsUserMemberOfRoom(context, userUUID, room.RoomID)
 
-	// if err != nil {
-	// 	return sqlc.Room{}, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
-	// }
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
 
-	// if isMember {
-	// 	return room, nil // Người dùng đã trong phòng
-	// }
+	if isMember {
+		return room, nil // Người dùng đã trong phòng
+	}
 
 	// Thêm người dùng vào phòng
-	// TODO: Implement AddRoomMember
-	// _, err = rs.roomRepo.AddRoomMember(context, sqlc.AddRoomMemberParams{
-	// 	UserUuid: userUUID,
-	// 	RoomID:   room.RoomID,
-	// })
+	_, err = rs.roomRepo.JoinRoom(context, userUUID, room.RoomID)
 
-	// if err != nil {
-	// 	return sqlc.Room{}, utils.WrapError(err, "could not add user to room", utils.ErrorCodeInternalServer)
-	// }
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not add user to room", utils.ErrorCodeInternalServer)
+	}
 
 	return room, nil
 }
 
 func (rs *roomService) GetUserRooms(ctx *gin.Context, userUUID uuid.UUID) ([]sqlc.Room, error) {
-	// TODO: Implement GetUserRooms
-	// context := ctx.Request.Context()
-	// rooms, err := rs.roomRepo.GetUserRooms(context, userUUID)
-	// if err != nil {
-	// 	return nil, utils.WrapError(err, "could not get user rooms", utils.ErrorCodeInternalServer)
-	// }
-	// return rooms, nil
-	return []sqlc.Room{}, nil
+	context := ctx.Request.Context()
+
+	rooms, err := rs.roomRepo.ListUserRooms(context, userUUID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get user rooms", utils.ErrorCodeInternalServer)
+	}
+
+	return rooms, nil
 }
 
 func (rs *roomService) GetRoomMembers(ctx *gin.Context, roomID int64) ([]sqlc.User, error) {
-	// TODO: Implement GetRoomMembers
-	// context := ctx.Request.Context()
-	// members, err := rs.roomRepo.GetRoomMembers(context, roomID)
-	// if err != nil {
-	// 	return nil, utils.WrapError(err, "could not get room members", utils.ErrorCodeInternalServer)
-	// }
-	// return members, nil
-	return []sqlc.User{}, nil
+	context := ctx.Request.Context()
+
+	members, err := rs.roomRepo.GetRoomMembers(context, roomID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get room members", utils.ErrorCodeInternalServer)
+	}
+
+	return members, nil
+} // IsUserMemberOfRoom implements RoomService interface for websocket
+func (rs *roomService) IsUserMemberOfRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (bool, error) {
+	return rs.roomRepo.IsUserMemberOfRoom(ctx, userUUID, roomID)
 }
 
-// IsUserMemberOfRoom implements RoomService interface for websocket
-func (rs *roomService) IsUserMemberOfRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (bool, error) {
-	// TODO: Implement proper room membership check
-	// For now, return true to allow websocket connection
-	return true, nil
+// Admin methods
+func (rs *roomService) GetAllRooms(ctx *gin.Context, limit, offset int32) ([]sqlc.GetAllRoomsWithMemberCountRow, error) {
+	context := ctx.Request.Context()
+
+	rooms, err := rs.roomRepo.GetAllRoomsWithMemberCount(context, limit, offset)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get rooms", utils.ErrorCodeInternalServer)
+	}
+
+	return rooms, nil
+}
+
+func (rs *roomService) GetRoomByID(ctx *gin.Context, roomID int64) (sqlc.Room, error) {
+	context := ctx.Request.Context()
+
+	room, err := rs.roomRepo.GetRoomByID(context, roomID)
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not get room", utils.ErrorCodeInternalServer)
+	}
+
+	return room, nil
+}
+
+func (rs *roomService) DeleteRoom(ctx *gin.Context, roomID int64) error {
+	context := ctx.Request.Context()
+
+	err := rs.roomRepo.DeleteRoom(context, roomID)
+	if err != nil {
+		return utils.WrapError(err, "could not delete room", utils.ErrorCodeInternalServer)
+	}
+
+	return nil
 }

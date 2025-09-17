@@ -30,3 +30,15 @@ func (ur *SqlUserRepository) GetUserByEmail(ctx context.Context, email string) (
 func (ur *SqlUserRepository) GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (sqlc.User, error) {
 	return ur.db.GetUserByUUID(ctx, userUuid)
 }
+
+// Admin methods
+func (ur *SqlUserRepository) GetAllUsers(ctx context.Context, limit, offset int32) ([]sqlc.User, error) {
+	return ur.db.GetAllUsers(ctx, sqlc.GetAllUsersParams{
+		Limit:  limit,
+		Offset: offset,
+	})
+}
+
+func (ur *SqlUserRepository) DeleteUser(ctx context.Context, userUUID uuid.UUID) error {
+	return ur.db.DeleteUser(ctx, userUUID)
+}

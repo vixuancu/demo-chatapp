@@ -31,6 +31,7 @@ type Room struct {
 type RoomMember struct {
 	UserUuid            uuid.UUID `json:"user_uuid"`
 	RoomID              int64     `json:"room_id"`
+	MemberRole          string    `json:"member_role"`
 	RoomMemberCreatedAt time.Time `json:"room_member_created_at"`
 	RoomMemberUpdatedAt time.Time `json:"room_member_updated_at"`
 }
@@ -40,6 +41,7 @@ type User struct {
 	UserEmail     string    `json:"user_email"`
 	UserPassword  string    `json:"user_password"`
 	UserFullname  string    `json:"user_fullname"`
+	UserRole      string    `json:"user_role"`
 	UserCreatedAt time.Time `json:"user_created_at"`
 	UserUpdatedAt time.Time `json:"user_updated_at"`
 }

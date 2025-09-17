@@ -3,9 +3,9 @@ package repository
 import (
 	"chat-app/internal/db/sqlc"
 	"context"
+
 	"github.com/google/uuid"
 )
-
 
 type SqlRoomRepository struct {
 	db sqlc.Querier
@@ -61,4 +61,16 @@ func (r *SqlRoomRepository) GenerateUniqueRoomCode(ctx context.Context) (string,
 		return "", err
 	}
 	return code, nil
+}
+
+// Admin methods
+func (r *SqlRoomRepository) GetAllRoomsWithMemberCount(ctx context.Context, limit, offset int32) ([]sqlc.GetAllRoomsWithMemberCountRow, error) {
+	return r.db.GetAllRoomsWithMemberCount(ctx, sqlc.GetAllRoomsWithMemberCountParams{
+		Limit:  limit,
+		Offset: offset,
+	})
+}
+
+func (r *SqlRoomRepository) DeleteRoom(ctx context.Context, roomID int64) error {
+	return r.db.DeleteRoom(ctx, roomID)
 }

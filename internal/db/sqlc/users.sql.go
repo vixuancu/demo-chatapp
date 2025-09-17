@@ -18,7 +18,7 @@ INSERT INTO
         user_password,
         user_fullname
     )
-VALUES ($1, $2, $3) RETURNING user_uuid, user_email, user_password, user_fullname, user_created_at, user_updated_at
+VALUES ($1, $2, $3) RETURNING user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at
 `
 
 type CreateUserParams struct {
@@ -35,14 +35,63 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.UserEmail,
 		&i.UserPassword,
 		&i.UserFullname,
+		&i.UserRole,
 		&i.UserCreatedAt,
 		&i.UserUpdatedAt,
 	)
 	return i, err
 }
 
+const deleteUser = `-- name: DeleteUser :exec
+DELETE FROM users WHERE user_uuid = $1
+`
+
+func (q *Queries) DeleteUser(ctx context.Context, userUuid uuid.UUID) error {
+	_, err := q.db.Exec(ctx, deleteUser, userUuid)
+	return err
+}
+
+const getAllUsers = `-- name: GetAllUsers :many
+SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at FROM users 
+ORDER BY user_created_at DESC 
+LIMIT $1 OFFSET $2
+`
+
+type GetAllUsersParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+func (q *Queries) GetAllUsers(ctx context.Context, arg GetAllUsersParams) ([]User, error) {
+	rows, err := q.db.Query(ctx, getAllUsers, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []User{}
+	for rows.Next() {
+		var i User
+		if err := rows.Scan(
+			&i.UserUuid,
+			&i.UserEmail,
+			&i.UserPassword,
+			&i.UserFullname,
+			&i.UserRole,
+			&i.UserCreatedAt,
+			&i.UserUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT user_uuid, user_email, user_password, user_fullname, user_created_at, user_updated_at FROM users WHERE user_email = $1
+SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at FROM users WHERE user_email = $1
 `
 
 func (q *Queries) GetUserByEmail(ctx context.Context, userEmail string) (User, error) {
@@ -53,6 +102,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, userEmail string) (User, e
 		&i.UserEmail,
 		&i.UserPassword,
 		&i.UserFullname,
+		&i.UserRole,
 		&i.UserCreatedAt,
 		&i.UserUpdatedAt,
 	)
@@ -60,7 +110,7 @@ func (q *Queries) GetUserByEmail(ctx context.Context, userEmail string) (User, e
 }
 
 const getUserByUUID = `-- name: GetUserByUUID :one
-SELECT user_uuid, user_email, user_password, user_fullname, user_created_at, user_updated_at FROM users WHERE user_uuid = $1
+SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at FROM users WHERE user_uuid = $1
 `
 
 func (q *Queries) GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (User, error) {
@@ -71,6 +121,7 @@ func (q *Queries) GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (User, 
 		&i.UserEmail,
 		&i.UserPassword,
 		&i.UserFullname,
+		&i.UserRole,
 		&i.UserCreatedAt,
 		&i.UserUpdatedAt,
 	)

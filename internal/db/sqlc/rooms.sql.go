@@ -7,6 +7,7 @@ package sqlc
 
 import (
 	"context"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -49,6 +50,15 @@ func (q *Queries) CreateRoom(ctx context.Context, arg CreateRoomParams) (Room, e
 	return i, err
 }
 
+const deleteRoom = `-- name: DeleteRoom :exec
+DELETE FROM rooms WHERE room_id = $1
+`
+
+func (q *Queries) DeleteRoom(ctx context.Context, roomID int64) error {
+	_, err := q.db.Exec(ctx, deleteRoom, roomID)
+	return err
+}
+
 const generateUniqueRoomCode = `-- name: GenerateUniqueRoomCode :one
 WITH random_code AS (
     SELECT array_to_string(ARRAY(SELECT chr((65 + round(random() * 25))::integer) 
@@ -63,6 +73,62 @@ func (q *Queries) GenerateUniqueRoomCode(ctx context.Context) (string, error) {
 	var code string
 	err := row.Scan(&code)
 	return code, err
+}
+
+const getAllRoomsWithMemberCount = `-- name: GetAllRoomsWithMemberCount :many
+SELECT 
+    r.room_id, r.room_code, r.room_name, r.room_is_direct_chat, r.room_created_by, r.room_created_at, r.room_updated_at,
+    COUNT(rm.user_uuid) as member_count
+FROM rooms r
+LEFT JOIN room_members rm ON r.room_id = rm.room_id
+GROUP BY r.room_id
+ORDER BY r.room_created_at DESC
+LIMIT $1 OFFSET $2
+`
+
+type GetAllRoomsWithMemberCountParams struct {
+	Limit  int32 `json:"limit"`
+	Offset int32 `json:"offset"`
+}
+
+type GetAllRoomsWithMemberCountRow struct {
+	RoomID           int64     `json:"room_id"`
+	RoomCode         string    `json:"room_code"`
+	RoomName         *string   `json:"room_name"`
+	RoomIsDirectChat bool      `json:"room_is_direct_chat"`
+	RoomCreatedBy    uuid.UUID `json:"room_created_by"`
+	RoomCreatedAt    time.Time `json:"room_created_at"`
+	RoomUpdatedAt    time.Time `json:"room_updated_at"`
+	MemberCount      int64     `json:"member_count"`
+}
+
+func (q *Queries) GetAllRoomsWithMemberCount(ctx context.Context, arg GetAllRoomsWithMemberCountParams) ([]GetAllRoomsWithMemberCountRow, error) {
+	rows, err := q.db.Query(ctx, getAllRoomsWithMemberCount, arg.Limit, arg.Offset)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []GetAllRoomsWithMemberCountRow{}
+	for rows.Next() {
+		var i GetAllRoomsWithMemberCountRow
+		if err := rows.Scan(
+			&i.RoomID,
+			&i.RoomCode,
+			&i.RoomName,
+			&i.RoomIsDirectChat,
+			&i.RoomCreatedBy,
+			&i.RoomCreatedAt,
+			&i.RoomUpdatedAt,
+			&i.MemberCount,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const getRoomByCode = `-- name: GetRoomByCode :one
@@ -104,7 +170,7 @@ func (q *Queries) GetRoomByID(ctx context.Context, roomID int64) (Room, error) {
 }
 
 const getRoomMembers = `-- name: GetRoomMembers :many
-SELECT u.user_uuid, u.user_email, u.user_password, u.user_fullname, u.user_created_at, u.user_updated_at
+SELECT u.user_uuid, u.user_email, u.user_password, u.user_fullname, u.user_role, u.user_created_at, u.user_updated_at
 FROM users u
     JOIN room_members rm ON u.user_uuid = rm.user_uuid
 WHERE
@@ -125,6 +191,7 @@ func (q *Queries) GetRoomMembers(ctx context.Context, roomID int64) ([]User, err
 			&i.UserEmail,
 			&i.UserPassword,
 			&i.UserFullname,
+			&i.UserRole,
 			&i.UserCreatedAt,
 			&i.UserUpdatedAt,
 		); err != nil {
@@ -163,7 +230,7 @@ func (q *Queries) IsUserMemberOfRoom(ctx context.Context, arg IsUserMemberOfRoom
 const joinRoom = `-- name: JoinRoom :one
 INSERT INTO
     room_members (user_uuid, room_id)
-VALUES ($1, $2) RETURNING user_uuid, room_id, room_member_created_at, room_member_updated_at
+VALUES ($1, $2) RETURNING user_uuid, room_id, member_role, room_member_created_at, room_member_updated_at
 `
 
 type JoinRoomParams struct {
@@ -177,6 +244,7 @@ func (q *Queries) JoinRoom(ctx context.Context, arg JoinRoomParams) (RoomMember,
 	err := row.Scan(
 		&i.UserUuid,
 		&i.RoomID,
+		&i.MemberRole,
 		&i.RoomMemberCreatedAt,
 		&i.RoomMemberUpdatedAt,
 	)

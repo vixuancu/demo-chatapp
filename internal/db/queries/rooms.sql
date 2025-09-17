@@ -13,6 +13,17 @@ INSERT INTO
     room_members (user_uuid, room_id)
 VALUES ($1, $2) RETURNING *;
 
+-- name: GetAllRoomsWithMemberCount :many
+SELECT r.*, COUNT(rm.user_uuid) as member_count
+FROM rooms r
+    LEFT JOIN room_members rm ON r.room_id = rm.room_id
+GROUP BY
+    r.room_id
+ORDER BY r.room_created_at DESC
+LIMIT $1
+OFFSET
+    $2;
+
 -- name: GetRoomByID :one
 SELECT * FROM rooms WHERE room_id = $1;
 
@@ -42,6 +53,9 @@ FROM users u
     JOIN room_members rm ON u.user_uuid = rm.user_uuid
 WHERE
     rm.room_id = $1;
+
+-- name: DeleteRoom :exec
+DELETE FROM rooms WHERE room_id = $1;
 
 -- name: GenerateUniqueRoomCode :one
 WITH random_code AS (

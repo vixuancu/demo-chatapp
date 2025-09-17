@@ -6,6 +6,8 @@ import (
 	"chat-app/internal/db/sqlc"
 	"chat-app/internal/routes"
 	"chat-app/internal/validation"
+	"chat-app/pkg/auth"
+	"chat-app/pkg/cache"
 	"chat-app/pkg/websocket"
 	"context"
 	"log"
@@ -28,7 +30,7 @@ type Application struct {
 	wsManager *websocket.Manager
 }
 type ModuleContext struct {
-	DB sqlc.Querier
+	DB        sqlc.Querier
 	WSManager *websocket.Manager
 }
 
@@ -40,27 +42,30 @@ func NewApplication(cfg *config.Config) *Application {
 	if err := db.InitDB(); err != nil {
 		log.Fatal("cannot connect to db:", err)
 	}
+	redisClient := config.NewRedisClient()
+	cacheService := cache.NewRedisCacheService(redisClient)
+	tokenService := auth.NewJWTService(cacheService)
 	// Create and start WebSocket manager
 	wsManager := websocket.NewManager()
 	go wsManager.Run()
 
-
 	ctx := &ModuleContext{
-		DB: db.DB,
+		DB:        db.DB,
 		WSManager: wsManager,
 	}
 	modules := []Module{
 		NewUserModule(ctx),
-		// NewAuthModule(ctx),
+		NewAuthModule(ctx,tokenService,cacheService),
 		NewRoomModule(ctx), // thêm module Room
 		NewChatModule(ctx),
+		NewAdminModule(ctx), // thêm module Admin
 	}
-	routes.RegisterRoutes(r, GetModuleRoutes(modules)...)
+	routes.RegisterRoutes(r,tokenService , GetModuleRoutes(modules)...)
 
 	return &Application{
-		config:  cfg,
-		router:  r,
-		modules: modules,
+		config:    cfg,
+		router:    r,
+		modules:   modules,
 		wsManager: wsManager,
 	}
 }

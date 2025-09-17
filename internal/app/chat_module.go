@@ -31,8 +31,11 @@ func NewChatModule(ctx *ModuleContext) *ChatModule {
 		userService,
 	)
 
+	// init Message handler
+	messageHandler := v1Handler.NewMessageHandler(messageService)
+
 	// init routes
-	chatRoutes := v1Routes.NewChatRoutes(wsHandler)
+	chatRoutes := v1Routes.NewChatRoutes(wsHandler, messageHandler)
 
 	return &ChatModule{
 		routes: chatRoutes,

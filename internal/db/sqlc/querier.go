@@ -15,7 +15,11 @@ type Querier interface {
 	CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error)
 	CreateRoom(ctx context.Context, arg CreateRoomParams) (Room, error)
 	CreateUser(ctx context.Context, arg CreateUserParams) (User, error)
+	DeleteRoom(ctx context.Context, roomID int64) error
+	DeleteUser(ctx context.Context, userUuid uuid.UUID) error
 	GenerateUniqueRoomCode(ctx context.Context) (string, error)
+	GetAllRoomsWithMemberCount(ctx context.Context, arg GetAllRoomsWithMemberCountParams) ([]GetAllRoomsWithMemberCountRow, error)
+	GetAllUsers(ctx context.Context, arg GetAllUsersParams) ([]User, error)
 	GetRoomByCode(ctx context.Context, roomCode string) (Room, error)
 	GetRoomByID(ctx context.Context, roomID int64) (Room, error)
 	GetRoomMembers(ctx context.Context, roomID int64) ([]User, error)

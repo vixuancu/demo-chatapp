@@ -6,12 +6,34 @@ services:
     container_name: chat-app-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: chat-app
-      POSTGRES_USER: vixuancu
-      POSTGRES_PASSWORD: 123456
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
     ports:
-      - "5434:5432"
+      - "5432:5432"
     volumes:
       - chat-app-pgdata:/var/lib/postgresql/data
+    networks:
+      - app-networks
+  chatapp-redis:
+    image: redis:8.0-alpine
+    container_name: chatapp-redis
+    restart: unless-stopped
+    environment:
+      REDIS_DB: ${REDIS_DB}
+      REDIS_USER: ${REDIS_USER}
+      REDIS_PASSWORD: ${REDIS_PASSWORD}
+    ports:
+      - "6379:6379"
+    volumes:
+      - chatapp-redis-data:/data
+      - ./system/redis/redis.conf:/usr/local/etc/redis/redis.conf
+    command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - app-networks
 volumes:
   chat-app-pgdata:
+  chatapp-redis-data:
+networks:
+  app-networks:
+    driver: bridge

@@ -3,12 +3,16 @@ CREATE EXTENSION IF NOT EXISTS "pgcrypto";
 
 -- Bảng users: Lưu thông tin người dùng
 CREATE TABLE users (
-    user_uuid UUID PRIMARY KEY DEFAULT gen_random_uuid(), -- UUID làm khóa chính, bảo mật và scale tốt
+    user_uuid UUID PRIMARY KEY DEFAULT gen_random_uuid (), -- UUID làm khóa chính, bảo mật và scale tốt
     user_email VARCHAR(100) UNIQUE NOT NULL, -- Email duy nhất, giới hạn 100 ký tự
     user_password VARCHAR(255) NOT NULL, -- Mật khẩu mã hóa (bcrypt/argon2), giới hạn 255 ký tự
     user_fullname VARCHAR(100) NOT NULL, -- Tên hiển thị của người dùng
+    user_role VARCHAR(20) NOT NULL DEFAULT 'Member', -- THÊM: Phân quyền người dùng
     user_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian tạo
-    user_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW() -- Thời gian cập nhật gần nhất
+    user_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian cập nhật gần nhất
+    CONSTRAINT chk_user_role CHECK (
+        user_role IN ('Admin', 'Member')
+    ) -- Chỉ cho phép 2 role
 );
 
 -- Bảng rooms: Lưu thông tin phòng chat (chat nhóm hoặc 1-1)
@@ -30,11 +34,15 @@ CREATE TABLE rooms (
 CREATE TABLE room_members (
     user_uuid UUID NOT NULL, -- Người dùng, tham chiếu đến user_uuid
     room_id BIGINT NOT NULL, -- Phòng chat, tham chiếu đến room_id
+    member_role VARCHAR(20) NOT NULL DEFAULT 'Member', -- THÊM: Vai trò trong phòng
     room_member_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian tham gia
     room_member_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian cập nhật
     CONSTRAINT pk_room_members PRIMARY KEY (user_uuid, room_id), -- Composite key tránh trùng lặp
     CONSTRAINT fk_user FOREIGN KEY (user_uuid) REFERENCES users (user_uuid) ON DELETE CASCADE, -- Xóa thành viên nếu người dùng bị xóa
-    CONSTRAINT fk_room FOREIGN KEY (room_id) REFERENCES rooms (room_id) ON DELETE CASCADE -- Xóa thành viên nếu phòng bị xóa
+    CONSTRAINT fk_room FOREIGN KEY (room_id) REFERENCES rooms (room_id) ON DELETE CASCADE, -- Xóa thành viên nếu phòng bị xóa
+    CONSTRAINT chk_member_role CHECK (
+        member_role IN ('Owner', 'Admin', 'Member')
+    ) -- Vai trò trong phòng
 );
 
 -- Bảng messages: Lưu tin nhắn trong phòng chat
@@ -85,6 +93,7 @@ BEGIN
     RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+
 CREATE TRIGGER update_room_members_timestamp
 BEFORE UPDATE ON room_members
 FOR EACH ROW
@@ -94,4 +103,3 @@ EXECUTE FUNCTION update_room_member_timestamp();
 
 -- Tìm kiếm các phòng của user (load user's rooms)
 CREATE INDEX idx_room_members_user_uuid ON room_members (user_uuid);
-

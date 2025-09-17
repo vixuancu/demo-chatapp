@@ -96,6 +96,17 @@ func ResponSuccess(c *gin.Context, status int, message string, data ...any) {
 	}
 	c.JSON(status, response)
 }
+
+// ResponseSuccess sends a successful response
+func ResponseSuccess(c *gin.Context, message string, data interface{}) {
+	response := APIResponse{
+		Status:  "success",
+		Message: message,
+		Data:    data,
+	}
+	c.JSON(http.StatusOK, response)
+}
+
 func ResponseStatusCode(c *gin.Context, status int) {
 	c.Status(status)
 }

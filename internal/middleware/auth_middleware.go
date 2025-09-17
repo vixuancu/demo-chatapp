@@ -2,11 +2,20 @@ package middleware
 
 import (
 	"chat-app/internal/utils"
+	"chat-app/pkg/auth"
 	"strings"
 
 	"github.com/gin-gonic/gin"
-	"github.com/golang-jwt/jwt/v5"
 )
+
+var (
+	jwtService auth.TokenService // Khai báo biến jwtService để sử dụng trong middleware
+	//cacheService cache.RedisCacheService // Khai báo biến cacheService để sử dụng trong middleware
+)
+func InitAuthMiddleware(jwtSvc auth.TokenService) {
+	jwtService = jwtSvc // Khởi tạo jwtService với TokenService đã được inject
+	//cacheService = cache // Khởi tạo cacheService với RedisCacheService đã được inject
+}
 
 func AuthMiddleware(secret string) gin.HandlerFunc {
 	return func(c *gin.Context) {
@@ -26,29 +35,47 @@ func AuthMiddleware(secret string) gin.HandlerFunc {
 		}
 
 		tokenString := parts[1]
-		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
-			// Validate the algorithm
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, utils.NewError("unexpected signing method", utils.ErrorCodeUnauthorized)
-			}
-			return []byte(secret), nil
-		})
 
+		// Validate token using utility function
+		claims, err := jwtService.ValidateJWTToken(tokenString)
 		if err != nil {
-			utils.ResponseError(c, utils.WrapError(err, "invalid token", utils.ErrorCodeUnauthorized))
+			utils.ResponseError(c, err)
 			c.Abort()
 			return
 		}
 
-		// trích xuất claims
-		if claims, ok := token.Claims.(jwt.MapClaims); ok && token.Valid {
-			// Add claims to context
-			c.Set("userUUID", claims["sub"])
-			c.Next()
-		} else {
-			utils.ResponseError(c, utils.NewError("invalid token claims", utils.ErrorCodeUnauthorized))
+		// Set claims in context với đầy đủ thông tin
+		c.Set("userUUID", claims.UserUUID)
+		c.Set("userEmail", claims.Email)
+		c.Set("userFullname", claims.Fullname)
+		c.Set("userRole", claims.Role)
+
+		c.Next()
+	}
+}
+
+// RequireAuth is a middleware that requires authentication
+func RequireAuth(secret string) gin.HandlerFunc {
+	return AuthMiddleware(secret)
+}
+
+// RequireAdmin is a middleware that requires admin role
+func RequireAdmin() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		userRole, exists := c.Get("userRole")
+		if !exists {
+			utils.ResponseError(c, utils.NewError("user role not found", utils.ErrorCodeUnauthorized))
 			c.Abort()
 			return
 		}
+
+		role, ok := userRole.(string)
+		if !ok || role != "Admin" {
+			utils.ResponseError(c, utils.NewError("admin access required", utils.ErrorCodeForbidden))
+			c.Abort()
+			return
+		}
+
+		c.Next()
 	}
 }
