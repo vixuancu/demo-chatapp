@@ -15,6 +15,7 @@ type Routes interface {
 func RegisterRoutes(router *gin.Engine, authService auth.TokenService, routes ...Routes) {
 
 	router.Use(gzip.Gzip(gzip.DefaultCompression)) // dùng gzip tối ưu băng thông
+	router.Use(middleware.CORSMiddleware())
 	// middlewares can be added here
 	middleware.InitAuthMiddleware(authService)
 	v1api := router.Group("/api/v1")

@@ -4,6 +4,7 @@ import (
 	"chat-app/internal/db/sqlc"
 	"chat-app/internal/services/v1"
 	"chat-app/internal/utils"
+	"chat-app/pkg/auth"
 	wsmanager "chat-app/pkg/websocket"
 	"context"
 	"encoding/json"
@@ -30,35 +31,48 @@ type WebSocketHandler struct {
 	roomService    services.RoomService
 	messageService services.MessageService
 	userService    services.UserService
+	jwtService     auth.TokenService
 }
 
 func NewWebSocketHandler(manager *wsmanager.Manager,
 	roomService services.RoomService,
 	messageService services.MessageService,
-	userService services.UserService) *WebSocketHandler {
+	userService services.UserService,
+	jwtService auth.TokenService) *WebSocketHandler {
 
 	return &WebSocketHandler{
 		manager:        manager,
 		roomService:    roomService,
 		messageService: messageService,
 		userService:    userService,
+		jwtService:     jwtService,
 	}
 }
 
 func (wh *WebSocketHandler) HandleWebSocket(c *gin.Context) {
-	// Get user UUID from authentication (assuming JWT auth)
-	userUUID, exists := c.Get("userUUID")
-	if !exists {
-		utils.ResponseError(c, utils.NewError("unauthorized", utils.ErrorCodeUnauthorized))
+	// Get token from query parameter instead of middleware
+	token := c.Query("token")
+	if token == "" {
+		utils.ResponseError(c, utils.NewError("token required", utils.ErrorCodeUnauthorized))
+		return
+	}
+
+	// Validate token using JWT service
+	claims, err := wh.jwtService.ValidateJWTToken(token)
+	if err != nil {
+		log.Printf("WebSocket auth failed: %v", err)
+		utils.ResponseError(c, utils.NewError("invalid token", utils.ErrorCodeUnauthorized))
 		return
 	}
 
 	// Convert to UUID
-	userID, err := uuid.Parse(userUUID.(string))
+	userID, err := uuid.Parse(claims.UserUUID)
 	if err != nil {
 		utils.ResponseError(c, utils.NewError("invalid user ID", utils.ErrorCodeBadRequest))
 		return
 	}
+
+	log.Printf("WebSocket auth success for user: %s", claims.UserUUID)
 
 	// Upgrade HTTP connection to WebSocket
 	conn, err := upgrader.Upgrade(c.Writer, c.Request, nil)

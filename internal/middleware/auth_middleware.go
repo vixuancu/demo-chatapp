@@ -17,7 +17,7 @@ func InitAuthMiddleware(jwtSvc auth.TokenService) {
 	//cacheService = cache // Khởi tạo cacheService với RedisCacheService đã được inject
 }
 
-func AuthMiddleware(secret string) gin.HandlerFunc {
+func AuthMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
 		if authHeader == "" {
@@ -55,8 +55,8 @@ func AuthMiddleware(secret string) gin.HandlerFunc {
 }
 
 // RequireAuth is a middleware that requires authentication
-func RequireAuth(secret string) gin.HandlerFunc {
-	return AuthMiddleware(secret)
+func RequireAuth() gin.HandlerFunc {
+	return AuthMiddleware()
 }
 
 // RequireAdmin is a middleware that requires admin role
