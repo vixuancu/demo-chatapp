@@ -4,6 +4,7 @@ import (
 	"chat-app/internal/db/sqlc"
 	"chat-app/internal/repository"
 	"chat-app/internal/utils"
+	"context"
 	"errors"
 
 	"github.com/gin-gonic/gin"
@@ -50,6 +51,22 @@ func (us *userService) GetUserByUUID(ctx *gin.Context, userUUID string) (sqlc.Us
 
 	// Get user from repository
 	user, err := us.userRepo.GetUserByUUID(context, uuid)
+	if err != nil {
+		return sqlc.User{}, utils.WrapError(err, "user not found", utils.ErrorCodeNotFound)
+	}
+
+	return user, nil
+}
+
+func (us *userService) GetUserByUUIDWithContext(ctx context.Context, userUUID string) (sqlc.User, error) {
+	// Parse UUID
+	uuid, err := parseUUID(userUUID)
+	if err != nil {
+		return sqlc.User{}, utils.NewError("invalid user ID", utils.ErrorCodeBadRequest)
+	}
+
+	// Get user from repository
+	user, err := us.userRepo.GetUserByUUID(ctx, uuid)
 	if err != nil {
 		return sqlc.User{}, utils.WrapError(err, "user not found", utils.ErrorCodeNotFound)
 	}

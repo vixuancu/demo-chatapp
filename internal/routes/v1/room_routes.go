@@ -26,5 +26,7 @@ func (rr *RoomRoutes) Register(r *gin.RouterGroup) {
 		roomGroup.GET("/:roomID", rr.roomHandler.GetRoom)                // chưa làm xong, ko có tác vụ trong web hiện tại
 		roomGroup.GET("/:roomID/members", rr.roomHandler.GetRoomMembers) //✅
 		roomGroup.POST("/join-by-code", rr.roomHandler.JoinRoomByCode)   //✅
+		roomGroup.POST("/:roomID/join", rr.roomHandler.JoinRoomByID)     //✅ NEW
+		roomGroup.POST("/:roomID/leave", rr.roomHandler.LeaveRoom)       //✅ NEW
 	}
 }

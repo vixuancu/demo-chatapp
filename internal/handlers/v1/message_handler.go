@@ -66,11 +66,8 @@ func (mh *MessageHandler) GetRoomMessages(c *gin.Context) {
 		return
 	}
 
-	// TODO: Check if user is member of room before allowing access to messages
-	_ = userID
-
-	// Get room messages
-	messages, err := mh.messageService.GetRoomMessages(c, roomID, int32(limit), int32(offset))
+	// Get room messages with user info
+	messages, err := mh.messageService.GetRoomMessagesWithUsers(c, roomID, userID, int32(limit), int32(offset))
 	if err != nil {
 		utils.ResponseError(c, err)
 		return

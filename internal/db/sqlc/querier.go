@@ -28,7 +28,9 @@ type Querier interface {
 	GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (User, error)
 	IsUserMemberOfRoom(ctx context.Context, arg IsUserMemberOfRoomParams) (bool, error)
 	JoinRoom(ctx context.Context, arg JoinRoomParams) (RoomMember, error)
+	LeaveRoom(ctx context.Context, arg LeaveRoomParams) error
 	ListUserRooms(ctx context.Context, userUuid uuid.UUID) ([]Room, error)
+	ListUserRoomsWithLastMessage(ctx context.Context, userUuid uuid.UUID) ([]ListUserRoomsWithLastMessageRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

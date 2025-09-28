@@ -27,6 +27,14 @@ func (r *SqlRoomRepository) JoinRoom(ctx context.Context, userUUID uuid.UUID, ro
 	return r.db.JoinRoom(ctx, params)
 }
 
+func (r *SqlRoomRepository) LeaveRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) error {
+	params := sqlc.LeaveRoomParams{
+		UserUuid: userUUID,
+		RoomID:   roomID,
+	}
+	return r.db.LeaveRoom(ctx, params)
+}
+
 func (r *SqlRoomRepository) GetRoomByID(ctx context.Context, roomID int64) (sqlc.Room, error) {
 	return r.db.GetRoomByID(ctx, roomID)
 }
@@ -37,6 +45,10 @@ func (r *SqlRoomRepository) GetRoomByCode(ctx context.Context, code string) (sql
 
 func (r *SqlRoomRepository) ListUserRooms(ctx context.Context, userUUID uuid.UUID) ([]sqlc.Room, error) {
 	return r.db.ListUserRooms(ctx, userUUID)
+}
+
+func (r *SqlRoomRepository) ListUserRoomsWithLastMessage(ctx context.Context, userUUID uuid.UUID) ([]sqlc.ListUserRoomsWithLastMessageRow, error) {
+	return r.db.ListUserRoomsWithLastMessage(ctx, userUUID)
 }
 
 func (r *SqlRoomRepository) IsUserMemberOfRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (bool, error) {

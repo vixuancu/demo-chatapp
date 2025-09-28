@@ -22,7 +22,7 @@ func NewChatModule(ctx *ModuleContext) *ChatModule {
 	userRepo := repository.NewSqlUserRepository(ctx.DB)
 
 	// init services
-	messageService := services.NewMessageService(messageRepo, roomRepo)
+	messageService := services.NewMessageService(messageRepo, roomRepo, userRepo)
 	roomService := services.NewRoomService(roomRepo, userRepo)
 	userService := services.NewUserService(userRepo)
 

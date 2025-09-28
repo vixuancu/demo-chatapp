@@ -22,8 +22,16 @@ func NewChatRoutes(wsHandler *v1Handler.WebSocketHandler, messageHandler *v1Hand
 func (cr *ChatRoutes) Register(r *gin.RouterGroup) {
 	chatGroup := r.Group("/chat")
 	{
-		// WebSocket endpoint - handles auth internally via query parameter
-		chatGroup.GET("/ws", cr.wsHandler.HandleWebSocket)
+		// Health check endpoint
+		chatGroup.GET("/health", func(c *gin.Context) {
+			c.JSON(200, gin.H{"status": "WebSocket server running"})
+		})
+
+		// WebSocket endpoint
+        chatGroup.GET("/ws", cr.wsHandler.HandleWebSocket)
+        
+        // Debug endpoint
+        chatGroup.GET("/rooms/:roomID/status", cr.wsHandler.GetRoomStatus)
 	}
 
 	// Message endpoints - use middleware auth

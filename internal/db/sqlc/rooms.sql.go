@@ -76,14 +76,15 @@ func (q *Queries) GenerateUniqueRoomCode(ctx context.Context) (string, error) {
 }
 
 const getAllRoomsWithMemberCount = `-- name: GetAllRoomsWithMemberCount :many
-SELECT 
-    r.room_id, r.room_code, r.room_name, r.room_is_direct_chat, r.room_created_by, r.room_created_at, r.room_updated_at,
-    COUNT(rm.user_uuid) as member_count
+SELECT r.room_id, r.room_code, r.room_name, r.room_is_direct_chat, r.room_created_by, r.room_created_at, r.room_updated_at, COUNT(rm.user_uuid) as member_count
 FROM rooms r
-LEFT JOIN room_members rm ON r.room_id = rm.room_id
-GROUP BY r.room_id
+    LEFT JOIN room_members rm ON r.room_id = rm.room_id
+GROUP BY
+    r.room_id
 ORDER BY r.room_created_at DESC
-LIMIT $1 OFFSET $2
+LIMIT $1
+OFFSET
+    $2
 `
 
 type GetAllRoomsWithMemberCountParams struct {
@@ -251,6 +252,21 @@ func (q *Queries) JoinRoom(ctx context.Context, arg JoinRoomParams) (RoomMember,
 	return i, err
 }
 
+const leaveRoom = `-- name: LeaveRoom :exec
+DELETE FROM room_members 
+WHERE user_uuid = $1 AND room_id = $2
+`
+
+type LeaveRoomParams struct {
+	UserUuid uuid.UUID `json:"user_uuid"`
+	RoomID   int64     `json:"room_id"`
+}
+
+func (q *Queries) LeaveRoom(ctx context.Context, arg LeaveRoomParams) error {
+	_, err := q.db.Exec(ctx, leaveRoom, arg.UserUuid, arg.RoomID)
+	return err
+}
+
 const listUserRooms = `-- name: ListUserRooms :many
 SELECT r.room_id, r.room_code, r.room_name, r.room_is_direct_chat, r.room_created_by, r.room_created_at, r.room_updated_at
 FROM rooms r
@@ -277,6 +293,83 @@ func (q *Queries) ListUserRooms(ctx context.Context, userUuid uuid.UUID) ([]Room
 			&i.RoomCreatedBy,
 			&i.RoomCreatedAt,
 			&i.RoomUpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUserRoomsWithLastMessage = `-- name: ListUserRoomsWithLastMessage :many
+SELECT 
+    r.room_id,
+    r.room_code,
+    r.room_name,
+    r.room_is_direct_chat,
+    r.room_created_by,
+    r.room_created_at,
+    r.room_updated_at,
+    -- Last message info with COALESCE to handle NULL
+    COALESCE(lm.message_id, 0) as last_message_id,
+    COALESCE(lm.content, '') as last_message_content,
+    COALESCE(lm.message_created_at, r.room_created_at) as last_message_time,
+    COALESCE(lm.user_uuid, '00000000-0000-0000-0000-000000000000'::uuid) as last_sender_uuid,
+    u.user_fullname as last_sender_name
+FROM rooms r
+INNER JOIN room_members rm ON r.room_id = rm.room_id
+LEFT JOIN LATERAL (
+    SELECT m.message_id, m.content, m.message_created_at, m.user_uuid
+    FROM messages m 
+    WHERE m.room_id = r.room_id 
+    ORDER BY m.message_created_at DESC 
+    LIMIT 1
+) lm ON true
+LEFT JOIN users u ON lm.user_uuid = u.user_uuid
+WHERE rm.user_uuid = $1
+ORDER BY COALESCE(lm.message_created_at, r.room_created_at) DESC
+`
+
+type ListUserRoomsWithLastMessageRow struct {
+	RoomID             int64     `json:"room_id"`
+	RoomCode           string    `json:"room_code"`
+	RoomName           *string   `json:"room_name"`
+	RoomIsDirectChat   bool      `json:"room_is_direct_chat"`
+	RoomCreatedBy      uuid.UUID `json:"room_created_by"`
+	RoomCreatedAt      time.Time `json:"room_created_at"`
+	RoomUpdatedAt      time.Time `json:"room_updated_at"`
+	LastMessageID      int64     `json:"last_message_id"`
+	LastMessageContent string    `json:"last_message_content"`
+	LastMessageTime    time.Time `json:"last_message_time"`
+	LastSenderUuid     uuid.UUID `json:"last_sender_uuid"`
+	LastSenderName     *string   `json:"last_sender_name"`
+}
+
+func (q *Queries) ListUserRoomsWithLastMessage(ctx context.Context, userUuid uuid.UUID) ([]ListUserRoomsWithLastMessageRow, error) {
+	rows, err := q.db.Query(ctx, listUserRoomsWithLastMessage, userUuid)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []ListUserRoomsWithLastMessageRow{}
+	for rows.Next() {
+		var i ListUserRoomsWithLastMessageRow
+		if err := rows.Scan(
+			&i.RoomID,
+			&i.RoomCode,
+			&i.RoomName,
+			&i.RoomIsDirectChat,
+			&i.RoomCreatedBy,
+			&i.RoomCreatedAt,
+			&i.RoomUpdatedAt,
+			&i.LastMessageID,
+			&i.LastMessageContent,
+			&i.LastMessageTime,
+			&i.LastSenderUuid,
+			&i.LastSenderName,
 		); err != nil {
 			return nil, err
 		}

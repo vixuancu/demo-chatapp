@@ -1,0 +1,63 @@
+nohup: ignoring input
+2025/09/24 17:06:13 connected VXC
+[GIN-debug] [WARNING] Creating an Engine instance with the Logger and Recovery middleware already attached.
+
+[GIN-debug] [WARNING] Running in "debug" mode. Switch to "release" mode in production.
+ - using env:	export GIN_MODE=release
+ - using code:	gin.SetMode(gin.ReleaseMode)
+
+2025/09/24 17:06:13 connected VXC
+2025/09/24 17:06:13 Connected to Redis successfully
+2025/09/24 17:06:13 Connected to Redis successfully
+[GIN-debug] POST   /api/v1/users             --> chat-app/internal/handlers/v1.(*UserHandler).CreateUser-fm (5 handlers)
+[GIN-debug] POST   /api/v1/auth/login        --> chat-app/internal/handlers/v1.(*AuthHandler).Login-fm (5 handlers)
+[GIN-debug] POST   /api/v1/auth/register     --> chat-app/internal/handlers/v1.(*AuthHandler).Register-fm (5 handlers)
+[GIN-debug] POST   /api/v1/auth/logout       --> chat-app/internal/handlers/v1.(*AuthHandler).Logout-fm (6 handlers)
+[GIN-debug] GET    /api/v1/auth/me           --> chat-app/internal/handlers/v1.(*AuthHandler).GetMe-fm (6 handlers)
+[GIN-debug] POST   /api/v1/rooms             --> chat-app/internal/handlers/v1.(*RoomHandler).CreateRoom-fm (6 handlers)
+[GIN-debug] GET    /api/v1/rooms             --> chat-app/internal/handlers/v1.(*RoomHandler).ListRooms-fm (6 handlers)
+[GIN-debug] GET    /api/v1/rooms/:roomID     --> chat-app/internal/handlers/v1.(*RoomHandler).GetRoom-fm (6 handlers)
+[GIN-debug] GET    /api/v1/rooms/:roomID/members --> chat-app/internal/handlers/v1.(*RoomHandler).GetRoomMembers-fm (6 handlers)
+[GIN-debug] POST   /api/v1/rooms/join-by-code --> chat-app/internal/handlers/v1.(*RoomHandler).JoinRoomByCode-fm (6 handlers)
+[GIN-debug] GET    /api/v1/chat/ws           --> chat-app/internal/handlers/v1.(*WebSocketHandler).HandleWebSocket-fm (5 handlers)
+[GIN-debug] GET    /api/v1/rooms/:roomID/messages --> chat-app/internal/handlers/v1.(*MessageHandler).GetRoomMessages-fm (6 handlers)
+[GIN-debug] POST   /api/v1/rooms/:roomID/messages --> chat-app/internal/handlers/v1.(*MessageHandler).SendMessage-fm (6 handlers)
+[GIN-debug] GET    /api/v1/admin/users       --> chat-app/internal/handlers/v1.(*AdminHandler).GetAllUsers-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/admin/users/:user_uuid --> chat-app/internal/handlers/v1.(*AdminHandler).DeleteUser-fm (7 handlers)
+[GIN-debug] GET    /api/v1/admin/rooms       --> chat-app/internal/handlers/v1.(*AdminHandler).GetAllRooms-fm (7 handlers)
+[GIN-debug] GET    /api/v1/admin/rooms/:room_id --> chat-app/internal/handlers/v1.(*AdminHandler).GetRoomDetails-fm (7 handlers)
+[GIN-debug] DELETE /api/v1/admin/rooms/:room_id --> chat-app/internal/handlers/v1.(*AdminHandler).DeleteRoom-fm (7 handlers)
+2025/09/24 17:06:13 ❤️ Starting server on :8081
+[GIN] 2025/09/24 - 17:06:50 | 404 |      33.775µs |       127.0.0.1 | GET      "/health"
+[GIN] 2025/09/24 - 17:07:04 | 201 |   74.283067ms |       127.0.0.1 | POST     "/api/v1/auth/register"
+[GIN] 2025/09/24 - 17:07:13 | 200 |   14.799827ms |       127.0.0.1 | POST     "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:07:58 | 200 |   23.618108ms |       127.0.0.1 | POST     "/api/v1/rooms/12/messages"
+[GIN] 2025/09/24 - 17:10:40 | 201 |   72.725907ms |       127.0.0.1 | POST     "/api/v1/auth/register"
+[GIN] 2025/09/24 - 17:10:40 | 200 |   10.709105ms |       127.0.0.1 | POST     "/api/v1/rooms"
+2025/09/24 17:10:40 WebSocket auth success for user: aeeefe08-f991-4783-9cc7-527487cfddda (room: 13)
+2025/09/24 17:10:40 Client registered: e8e50ec3-6c9d-4cb0-aea9-bc4bd9797c2a
+2025/09/24 17:10:40 Client auto-joined room 13
+[GIN] 2025/09/24 - 17:10:40 | 200 |    2.120079ms |       127.0.0.1 | GET      "/api/v1/chat/ws?token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VyX3V1aWQiOiJhZWVlZmUwOC1mOTkxLTQ3ODMtOWNjNy01Mjc0ODdjZmRkZGEiLCJlbWFpbCI6IndzX3Rlc3RAZXhhbXBsZS5jb20iLCJmdWxsbmFtZSI6IldlYlNvY2tldCBUZXN0IFVzZXIiLCJyb2xlIjoiTWVtYmVyIiwic3ViIjoiYWVlZWZlMDgtZjk5MS00NzgzLTljYzctNTI3NDg3Y2ZkZGRhIiwiZXhwIjoxNzU4Nzk1MDQwLCJpYXQiOjE3NTg3MDg2NDB9.z_6UUySYrodTrrHRLqhAJO1MWq518AqBSfmeDEruXSQ&room_id=13"
+2025/09/24 17:10:40 Received message from client e8e50ec3-6c9d-4cb0-aea9-bc4bd9797c2a: {"type":"send_message","room_id":13,"content":"Hello from WebSocket test!"}
+2025/09/24 17:10:40 Message broadcasted to room 13 by user WebSocket Test User
+2025/09/24 17:10:40 error: websocket: close 1005 (no status)
+2025/09/24 17:10:40 Client unregistered: e8e50ec3-6c9d-4cb0-aea9-bc4bd9797c2a
+[GIN] 2025/09/24 - 17:15:59 | 200 |   16.566568ms |             ::1 | GET      "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    5.098842ms |             ::1 | GET      "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    2.246156ms |             ::1 | GET      "/api/v1/rooms/3/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    2.007354ms |             ::1 | GET      "/api/v1/rooms/4/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |   14.442615ms |             ::1 | GET      "/api/v1/rooms/5/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.944905ms |             ::1 | GET      "/api/v1/rooms/3/members"
+[GIN] 2025/09/24 - 17:15:59 | 204 |     159.714µs |             ::1 | OPTIONS  "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    2.069883ms |             ::1 | GET      "/api/v1/rooms/4/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.191876ms |             ::1 | GET      "/api/v1/rooms/5/members"
+[GIN] 2025/09/24 - 17:15:59 | 204 |     113.454µs |             ::1 | OPTIONS  "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    2.472498ms |             ::1 | GET      "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    2.237413ms |             ::1 | GET      "/api/v1/rooms"
+[GIN] 2025/09/24 - 17:15:59 | 204 |      60.069µs |             ::1 | OPTIONS  "/api/v1/rooms/9/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.745233ms |             ::1 | GET      "/api/v1/rooms/3/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.733598ms |             ::1 | GET      "/api/v1/rooms/9/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.328747ms |             ::1 | GET      "/api/v1/rooms/9/members"
+[GIN] 2025/09/24 - 17:15:59 | 200 |    1.411548ms |             ::1 | GET      "/api/v1/rooms/3/members"
+2025/09/24 17:30:28 🍺 Shutting down server...
+2025/09/24 17:30:28 🍺 Server exiting

@@ -20,9 +20,11 @@ type UserRepository interface {
 type RoomRepository interface {
 	CreateRoom(ctx context.Context, params sqlc.CreateRoomParams) (sqlc.Room, error)
 	JoinRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (sqlc.RoomMember, error)
+	LeaveRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) error
 	GetRoomByID(ctx context.Context, roomID int64) (sqlc.Room, error)
 	GetRoomByCode(ctx context.Context, code string) (sqlc.Room, error)
 	ListUserRooms(ctx context.Context, userUUID uuid.UUID) ([]sqlc.Room, error)
+	ListUserRoomsWithLastMessage(ctx context.Context, userUUID uuid.UUID) ([]sqlc.ListUserRoomsWithLastMessageRow, error)
 	IsUserMemberOfRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (bool, error)
 	GetRoomMembers(ctx context.Context, roomID int64) ([]sqlc.User, error)
 	GenerateUniqueRoomCode(ctx context.Context) (string, error)

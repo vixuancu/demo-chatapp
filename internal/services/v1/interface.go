@@ -2,6 +2,7 @@ package services
 
 import (
 	"chat-app/internal/db/sqlc"
+	v1Dto "chat-app/internal/dto/v1"
 	"context"
 
 	"github.com/gin-gonic/gin"
@@ -11,6 +12,7 @@ import (
 type UserService interface {
 	CreateUser(ctx *gin.Context, input sqlc.CreateUserParams) (sqlc.User, error)
 	GetUserByUUID(ctx *gin.Context, userUUID string) (sqlc.User, error)
+	GetUserByUUIDWithContext(ctx context.Context, userUUID string) (sqlc.User, error)
 	GetAllUsers(ctx *gin.Context, limit, offset int32) ([]sqlc.User, error)
 	DeleteUser(ctx *gin.Context, userUUID string) error
 }
@@ -21,7 +23,10 @@ type AuthService interface {
 type RoomService interface {
 	CreateRoom(ctx *gin.Context, name string, isDirectChat bool, creatorUUID uuid.UUID) (sqlc.Room, error)
 	JoinRoom(ctx *gin.Context, roomCode string, userUUID uuid.UUID) (sqlc.Room, error)
+	JoinRoomByID(ctx *gin.Context, roomID int64, userUUID uuid.UUID) (sqlc.Room, error)
+	LeaveRoom(ctx *gin.Context, roomID int64, userUUID uuid.UUID) error
 	GetUserRooms(ctx *gin.Context, userUUID uuid.UUID) ([]sqlc.Room, error)
+	GetUserRoomsWithLastMessage(ctx *gin.Context, userUUID uuid.UUID) ([]sqlc.ListUserRoomsWithLastMessageRow, error)
 	GetRoomMembers(ctx *gin.Context, roomID int64) ([]sqlc.User, error)
 	IsUserMemberOfRoom(ctx context.Context, userUUID uuid.UUID, roomID int64) (bool, error)
 
@@ -34,5 +39,6 @@ type RoomService interface {
 type MessageService interface {
 	SaveMessage(ctx *gin.Context, roomID int64, userUUID uuid.UUID, content string) (sqlc.Message, error)
 	GetRoomMessages(ctx *gin.Context, roomID int64, limit, offset int32) ([]sqlc.Message, error)
+	GetRoomMessagesWithUsers(ctx *gin.Context, roomID int64, userUUID uuid.UUID, limit, offset int32) ([]v1Dto.MessageWithUser, error)
 	CreateMessage(ctx context.Context, params sqlc.CreateMessageParams) (sqlc.Message, error)
 }

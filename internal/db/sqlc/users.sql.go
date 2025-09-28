@@ -52,9 +52,12 @@ func (q *Queries) DeleteUser(ctx context.Context, userUuid uuid.UUID) error {
 }
 
 const getAllUsers = `-- name: GetAllUsers :many
-SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at FROM users 
-ORDER BY user_created_at DESC 
-LIMIT $1 OFFSET $2
+SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at
+FROM users
+ORDER BY user_created_at DESC
+LIMIT $1
+OFFSET
+    $2
 `
 
 type GetAllUsersParams struct {

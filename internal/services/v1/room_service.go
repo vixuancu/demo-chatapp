@@ -100,12 +100,73 @@ func (rs *roomService) JoinRoom(ctx *gin.Context, roomCode string, userUUID uuid
 	return room, nil
 }
 
+func (rs *roomService) JoinRoomByID(ctx *gin.Context, roomID int64, userUUID uuid.UUID) (sqlc.Room, error) {
+	context := ctx.Request.Context()
+
+	// Tìm phòng theo ID
+	room, err := rs.roomRepo.GetRoomByID(context, roomID)
+	if err != nil {
+		return sqlc.Room{}, utils.NewError("room not found", utils.ErrorCodeNotFound)
+	}
+
+	// Kiểm tra xem người dùng đã trong phòng chưa
+	isMember, err := rs.roomRepo.IsUserMemberOfRoom(context, userUUID, roomID)
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
+
+	if isMember {
+		return room, nil // Người dùng đã trong phòng
+	}
+
+	// Thêm người dùng vào phòng
+	_, err = rs.roomRepo.JoinRoom(context, userUUID, roomID)
+	if err != nil {
+		return sqlc.Room{}, utils.WrapError(err, "could not add user to room", utils.ErrorCodeInternalServer)
+	}
+
+	return room, nil
+}
+
+func (rs *roomService) LeaveRoom(ctx *gin.Context, roomID int64, userUUID uuid.UUID) error {
+	context := ctx.Request.Context()
+
+	// Kiểm tra xem người dùng có trong phòng không
+	isMember, err := rs.roomRepo.IsUserMemberOfRoom(context, userUUID, roomID)
+	if err != nil {
+		return utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
+
+	if !isMember {
+		return utils.NewError("user is not a member of this room", utils.ErrorCodeForbidden)
+	}
+
+	// Xóa người dùng khỏi phòng
+	err = rs.roomRepo.LeaveRoom(context, userUUID, roomID)
+	if err != nil {
+		return utils.WrapError(err, "could not remove user from room", utils.ErrorCodeInternalServer)
+	}
+
+	return nil
+}
+
 func (rs *roomService) GetUserRooms(ctx *gin.Context, userUUID uuid.UUID) ([]sqlc.Room, error) {
 	context := ctx.Request.Context()
 
 	rooms, err := rs.roomRepo.ListUserRooms(context, userUUID)
 	if err != nil {
 		return nil, utils.WrapError(err, "could not get user rooms", utils.ErrorCodeInternalServer)
+	}
+
+	return rooms, nil
+}
+
+func (rs *roomService) GetUserRoomsWithLastMessage(ctx *gin.Context, userUUID uuid.UUID) ([]sqlc.ListUserRoomsWithLastMessageRow, error) {
+	context := ctx.Request.Context()
+
+	rooms, err := rs.roomRepo.ListUserRoomsWithLastMessage(context, userUUID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get user rooms with last message", utils.ErrorCodeInternalServer)
 	}
 
 	return rooms, nil

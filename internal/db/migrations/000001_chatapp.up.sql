@@ -99,6 +99,22 @@ BEFORE UPDATE ON room_members
 FOR EACH ROW
 EXECUTE FUNCTION update_room_member_timestamp();
 
+-- THÊM: Trigger để cập nhật room_updated_at khi có tin nhắn mới
+CREATE OR REPLACE FUNCTION update_room_timestamp_on_new_message()
+RETURNS TRIGGER AS $$
+BEGIN
+    UPDATE rooms
+    SET room_updated_at = NOW()
+    WHERE room_id = NEW.room_id;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_update_room_on_new_message
+AFTER INSERT ON messages
+FOR EACH ROW
+EXECUTE FUNCTION update_room_timestamp_on_new_message();
+
 -- Chỉ mục để tối ưu hóa truy vấn ====== primary key,unique đã có index tự động ======
 
 -- Tìm kiếm các phòng của user (load user's rooms)

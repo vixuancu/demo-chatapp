@@ -2,6 +2,7 @@ package services
 
 import (
 	"chat-app/internal/db/sqlc"
+	v1Dto "chat-app/internal/dto/v1"
 	"chat-app/internal/repository"
 	"chat-app/internal/utils"
 	"context"
@@ -13,12 +14,14 @@ import (
 type messageService struct {
 	messageRepo repository.MessageRepository
 	roomRepo    repository.RoomRepository
+	userRepo    repository.UserRepository
 }
 
-func NewMessageService(messageRepo repository.MessageRepository, roomRepo repository.RoomRepository) MessageService {
+func NewMessageService(messageRepo repository.MessageRepository, roomRepo repository.RoomRepository, userRepo repository.UserRepository) MessageService {
 	return &messageService{
 		messageRepo: messageRepo,
 		roomRepo:    roomRepo,
+		userRepo:    userRepo,
 	}
 }
 
@@ -67,6 +70,56 @@ func (ms *messageService) GetRoomMessages(ctx *gin.Context, roomID int64, limit,
 	}
 
 	return messages, nil
+}
+
+func (ms *messageService) GetRoomMessagesWithUsers(ctx *gin.Context, roomID int64, userUUID uuid.UUID, limit, offset int32) ([]v1Dto.MessageWithUser, error) {
+	context := ctx.Request.Context()
+
+	// Check if user is member of room
+	isMember, err := ms.roomRepo.IsUserMemberOfRoom(context, userUUID, roomID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
+
+	if !isMember {
+		return nil, utils.NewError("user is not a member of this room", utils.ErrorCodeForbidden)
+	}
+
+	// Get messages
+	messages, err := ms.messageRepo.GetRoomMessages(context, sqlc.GetRoomMessagesParams{
+		RoomID: roomID,
+		Limit:  limit,
+		Offset: offset,
+	})
+
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get room messages", utils.ErrorCodeInternalServer)
+	}
+
+	// Get user info for each message
+	var result []v1Dto.MessageWithUser
+	for _, msg := range messages {
+		user, err := ms.userRepo.GetUserByUUID(context, msg.UserUuid)
+		if err != nil {
+			// Skip message if user not found
+			continue
+		}
+
+		messageWithUser := v1Dto.MessageWithUser{
+			MessageID:        msg.MessageID,
+			RoomID:           msg.RoomID,
+			UserUUID:         msg.UserUuid.String(),
+			UserFullname:     user.UserFullname,
+			UserEmail:        user.UserEmail,
+			Content:          msg.Content,
+			MessageCreatedAt: msg.MessageCreatedAt,
+			IsOwn:            msg.UserUuid == userUUID,
+		}
+
+		result = append(result, messageWithUser)
+	}
+
+	return result, nil
 }
 
 // CreateMessage implements MessageService interface for websocket
