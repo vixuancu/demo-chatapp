@@ -28,10 +28,10 @@ func (cr *ChatRoutes) Register(r *gin.RouterGroup) {
 		})
 
 		// WebSocket endpoint
-        chatGroup.GET("/ws", cr.wsHandler.HandleWebSocket)
-        
-        // Debug endpoint
-        chatGroup.GET("/rooms/:roomID/status", cr.wsHandler.GetRoomStatus)
+		chatGroup.GET("/ws", cr.wsHandler.HandleWebSocket)
+
+		// Debug endpoint
+		chatGroup.GET("/rooms/:roomID/status", cr.wsHandler.GetRoomStatus)
 	}
 
 	// Message endpoints - use middleware auth
@@ -39,6 +39,6 @@ func (cr *ChatRoutes) Register(r *gin.RouterGroup) {
 	roomGroup.Use(middleware.AuthMiddleware()) // Add auth middleware!
 	{
 		roomGroup.GET("/:roomID/messages", cr.messageHandler.GetRoomMessages)
-		roomGroup.POST("/:roomID/messages", cr.messageHandler.SendMessage)
+		roomGroup.POST("/:roomID/messages", cr.messageHandler.SendMessage) /// api này sẽ không được dùng vì đã dùng thông qua websocket realtime thay vì dùng REST API nữa
 	}
 }

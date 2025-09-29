@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/gorilla/websocket"
@@ -31,48 +32,69 @@ type Message struct {
 	Priority  int             `json:"priority,omitempty"`   // Thêm priority để xử lý thứ tự
 }
 
+// Configuration for Manager
+type ManagerConfig struct {
+	ClientBufferSize   int
+	RoomQueueSize      int
+	BroadcastQueueSize int
+	MaxWorkers         int
+}
+
+func DefaultManagerConfig() ManagerConfig {
+	return ManagerConfig{
+		ClientBufferSize:   1024, // Increased from 256
+		RoomQueueSize:      1000, // Increased from 50
+		BroadcastQueueSize: 1000, // Increased from 100
+		MaxWorkers:         10,
+	}
+}
+
 // Manager quản lý tất cả các kết nối WebSocket và các phòng
 type Manager struct {
-	// Clients map client ID to Client
-	clients map[string]*Client
+	// Core data structures - single mutex for all
+	mu                sync.RWMutex
+	clients           map[string]*Client
+	rooms             map[int64]map[string]*Client
+	userConnections   map[string]map[int64]*Client // userUUID -> roomID -> client
+	roomMessageQueues map[int64]chan Message
 
-	// Rooms map room ID to all clients in that room
-	Rooms map[int64]map[string]*Client
-
-	// Register requests from clients
-	register chan *Client
-
-	// Unregister requests from clients
+	// Channels for async operations
+	register   chan *Client
 	unregister chan *Client
+	broadcast  chan Message
+	cleanup    chan int64 // Room cleanup channel
 
-	// Send message to specific room
-	broadcast chan Message
-
-	// Mutex for concurrent access to rooms and clients maps
-	Mutex sync.RWMutex
-
-	userConnections map[string]map[int64]*Client // userUUID -> roomID -> client
+	// Configuration
+	config ManagerConfig
 
 	// Room membership callback function
 	roomMembershipCallback RoomMembershipCheckFunc
 
-	// Message ordering channels per room
-	roomMessageQueues map[int64]chan Message
-	roomQueueMutex    sync.RWMutex
+	// Cleanup tracking
+	roomCleanup map[int64]*time.Timer
 }
+
+// RoomMembershipCheckFunc callback để kiểm tra quyền phòng
+type RoomMembershipCheckFunc func(userUUID uuid.UUID, roomID int64) (bool, error)
 
 // NewManager creates a new WebSocket manager
 func NewManager() *Manager {
+	return NewManagerWithConfig(DefaultManagerConfig())
+}
+
+// NewManagerWithConfig creates a new WebSocket manager with configuration
+func NewManagerWithConfig(config ManagerConfig) *Manager {
 	return &Manager{
 		clients:           make(map[string]*Client),
-		Rooms:             make(map[int64]map[string]*Client),
-		register:          make(chan *Client),
-		unregister:        make(chan *Client),
-		broadcast:         make(chan Message, 100),
-		Mutex:             sync.RWMutex{},
+		rooms:             make(map[int64]map[string]*Client),
 		userConnections:   make(map[string]map[int64]*Client),
 		roomMessageQueues: make(map[int64]chan Message),
-		roomQueueMutex:    sync.RWMutex{},
+		register:          make(chan *Client),
+		unregister:        make(chan *Client),
+		broadcast:         make(chan Message, config.BroadcastQueueSize),
+		cleanup:           make(chan int64, 100),
+		config:            config,
+		roomCleanup:       make(map[int64]*time.Timer),
 	}
 }
 
@@ -81,55 +103,106 @@ func (m *Manager) Run() {
 	for {
 		select {
 		case client := <-m.register:
-			m.Mutex.Lock()
+			m.mu.Lock()
 			m.clients[client.ID] = client
-			m.Mutex.Unlock()
+			m.mu.Unlock()
 			log.Printf("Client registered: %s", client.ID)
 
 		case client := <-m.unregister:
-			m.Mutex.Lock()
-			if _, ok := m.clients[client.ID]; ok {
-				// Remove from rooms
-				for roomID := range client.Rooms {
-					if roomClients, exists := m.Rooms[roomID]; exists {
-						delete(roomClients, client.ID)
-						// If room is empty, remove it and cleanup queue
-						if len(roomClients) == 0 {
-							delete(m.Rooms, roomID)
-							m.CleanupRoom(roomID)
-						}
-					}
-				}
-				// Remove client
-				delete(m.clients, client.ID)
-				close(client.Send)
-			}
-			m.Mutex.Unlock()
-			log.Printf("Client unregistered: %s", client.ID)
+			m.removeClientSafely(client)
 
 		case message := <-m.broadcast:
 			m.SendToRoom(message)
+
+		case roomID := <-m.cleanup:
+			m.cleanupEmptyRoom(roomID)
+		}
+	}
+}
+
+// removeClientSafely removes a client with proper cleanup
+func (m *Manager) removeClientSafely(client *Client) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, ok := m.clients[client.ID]; !ok {
+		return // Client already removed
+	}
+
+	userUUID := client.UserUUID.String()
+
+	// Remove from all rooms
+	for roomID := range client.Rooms {
+		if roomClients, exists := m.rooms[roomID]; exists {
+			delete(roomClients, client.ID)
+
+			// Remove from user connections tracking
+			if userRooms, userExists := m.userConnections[userUUID]; userExists {
+				delete(userRooms, roomID)
+				if len(userRooms) == 0 {
+					delete(m.userConnections, userUUID)
+				}
+			}
+
+			// Schedule cleanup if room is empty
+			if len(roomClients) == 0 {
+				select {
+				case m.cleanup <- roomID:
+				default:
+				}
+			}
+		}
+	}
+
+	// Remove client
+	delete(m.clients, client.ID)
+	close(client.Send)
+
+	log.Printf("🧹 Client %s unregistered (user: %s)", client.ID, userUUID)
+}
+
+// cleanupEmptyRoom cleans up empty room resources
+func (m *Manager) cleanupEmptyRoom(roomID int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Double check room is still empty
+	if roomClients, exists := m.rooms[roomID]; exists && len(roomClients) == 0 {
+		delete(m.rooms, roomID)
+		log.Printf("🏠 Room %d is now empty - removed", roomID)
+
+		// Cleanup message queue
+		if queue, exists := m.roomMessageQueues[roomID]; exists {
+			close(queue)
+			delete(m.roomMessageQueues, roomID)
+			log.Printf("Cleaned up queue for empty room %d", roomID)
+		}
+
+		// Cancel cleanup timer if exists
+		if timer, exists := m.roomCleanup[roomID]; exists {
+			timer.Stop()
+			delete(m.roomCleanup, roomID)
 		}
 	}
 }
 
 func (m *Manager) AddClientToRoom(roomID int64, client *Client) {
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	userUUID := client.UserUUID.String()
 
-	// ✅ Check if user already has connection in this room
+	// Check if user already has connection in this room
 	if m.userConnections[userUUID] == nil {
 		m.userConnections[userUUID] = make(map[int64]*Client)
 	}
 
-	// ✅ Close existing connection for this user in this room
+	// Close existing connection for this user in this room
 	if existingClient, exists := m.userConnections[userUUID][roomID]; exists {
 		log.Printf("🔄 Replacing existing connection for user %s in room %d", userUUID, roomID)
 
 		// Remove old client from room
-		if roomClients, roomExists := m.Rooms[roomID]; roomExists {
+		if roomClients, roomExists := m.rooms[roomID]; roomExists {
 			delete(roomClients, existingClient.ID)
 		}
 
@@ -140,11 +213,11 @@ func (m *Manager) AddClientToRoom(roomID int64, client *Client) {
 	}
 
 	// Add new connection
-	if m.Rooms[roomID] == nil {
-		m.Rooms[roomID] = make(map[string]*Client)
+	if m.rooms[roomID] == nil {
+		m.rooms[roomID] = make(map[string]*Client)
 	}
 
-	m.Rooms[roomID][client.ID] = client
+	m.rooms[roomID][client.ID] = client
 	m.userConnections[userUUID][roomID] = client
 	client.Rooms[roomID] = true
 
@@ -153,18 +226,31 @@ func (m *Manager) AddClientToRoom(roomID int64, client *Client) {
 
 // RemoveClientFromRoom removes a client from a specific room
 func (m *Manager) RemoveClientFromRoom(roomID int64, client *Client) {
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	// Remove room from client's rooms
 	delete(client.Rooms, roomID)
 
 	// Remove client from room
-	if _, ok := m.Rooms[roomID]; ok {
-		delete(m.Rooms[roomID], client.ID)
-		// If room is empty, remove it
-		if len(m.Rooms[roomID]) == 0 {
-			delete(m.Rooms, roomID)
+	if roomClients, ok := m.rooms[roomID]; ok {
+		delete(roomClients, client.ID)
+
+		// If room is empty, schedule cleanup
+		if len(roomClients) == 0 {
+			select {
+			case m.cleanup <- roomID:
+			default:
+			}
+		}
+	}
+
+	// Remove from user connections
+	userUUID := client.UserUUID.String()
+	if userRooms, exists := m.userConnections[userUUID]; exists {
+		delete(userRooms, roomID)
+		if len(userRooms) == 0 {
+			delete(m.userConnections, userUUID)
 		}
 	}
 }
@@ -177,9 +263,9 @@ func (m *Manager) SendToRoom(message Message) {
 	m.ensureRoomQueue(roomID)
 
 	// Gửi tin nhắn vào queue của phòng
-	m.roomQueueMutex.RLock()
+	m.mu.RLock()
 	queue, exists := m.roomMessageQueues[roomID]
-	m.roomQueueMutex.RUnlock()
+	m.mu.RUnlock()
 
 	if exists {
 		select {
@@ -197,20 +283,20 @@ func (m *Manager) SendToRoom(message Message) {
 
 // ensureRoomQueue đảm bảo có queue cho phòng
 func (m *Manager) ensureRoomQueue(roomID int64) {
-	m.roomQueueMutex.Lock()
-	defer m.roomQueueMutex.Unlock()
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
 	if _, exists := m.roomMessageQueues[roomID]; !exists {
-		m.roomMessageQueues[roomID] = make(chan Message, 50)
+		m.roomMessageQueues[roomID] = make(chan Message, m.config.RoomQueueSize)
 		go m.processRoomQueue(roomID)
 	}
 }
 
 // processRoomQueue xử lý queue tin nhắn của một phòng
 func (m *Manager) processRoomQueue(roomID int64) {
-	m.roomQueueMutex.RLock()
+	m.mu.RLock()
 	queue := m.roomMessageQueues[roomID]
-	m.roomQueueMutex.RUnlock()
+	m.mu.RUnlock()
 
 	for message := range queue {
 		m.processBroadcastMessage(message)
@@ -255,12 +341,12 @@ func (m *Manager) processBroadcastMessage(message Message) {
 	}
 }
 
-// Thêm hàm để lấy snapshot của clients trong room
+// GetClientsInRoom lấy snapshot của clients trong room
 func (m *Manager) GetClientsInRoom(roomID int64) []*Client {
-	m.Mutex.RLock()
-	defer m.Mutex.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	clients, exists := m.Rooms[roomID]
+	clients, exists := m.rooms[roomID]
 	if !exists {
 		return []*Client{}
 	}
@@ -273,43 +359,28 @@ func (m *Manager) GetClientsInRoom(roomID int64) []*Client {
 	return clientList
 }
 
-// Thêm hàm để xóa clients bị lỗi
+// RemoveFailedClients xóa clients bị lỗi
 func (m *Manager) RemoveFailedClients(failedClients []*Client) {
 	if len(failedClients) == 0 {
 		return
 	}
 
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
-
 	for _, client := range failedClients {
-		// Remove from all rooms
-		for roomID := range client.Rooms {
-			if roomClients, exists := m.Rooms[roomID]; exists {
-				delete(roomClients, client.ID)
-				log.Printf("Removed client %s from room %d", client.ID, roomID)
-
-				// If room is empty, remove it
-				if len(roomClients) == 0 {
-					delete(m.Rooms, roomID)
-					log.Printf("Room %d is now empty - removed", roomID)
-				}
-			}
+		// Use unregister channel for consistent cleanup
+		select {
+		case m.unregister <- client:
+		default:
+			log.Printf("Failed to queue client %s for removal", client.ID)
 		}
-
-		// Remove from clients map
-		delete(m.clients, client.ID)
-		close(client.Send)
-		log.Printf("Removed failed client %s", client.ID)
 	}
 }
 
 // IsClientInRoom checks if client is in a specific room
 func (m *Manager) IsClientInRoom(roomID int64, clientID string) bool {
-	m.Mutex.RLock()
-	defer m.Mutex.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	if roomClients, exists := m.Rooms[roomID]; exists {
+	if roomClients, exists := m.rooms[roomID]; exists {
 		_, inRoom := roomClients[clientID]
 		return inRoom
 	}
@@ -323,51 +394,21 @@ func (m *Manager) Register(client *Client) {
 
 // Unregister removes a client from the manager
 func (m *Manager) Unregister(client *Client) {
-	m.Mutex.Lock()
-	defer m.Mutex.Unlock()
-
-	if _, ok := m.clients[client.ID]; ok {
-		userUUID := client.UserUUID.String()
-
-		// Remove from all rooms
-		for roomID := range client.Rooms {
-			if roomClients, exists := m.Rooms[roomID]; exists {
-				delete(roomClients, client.ID)
-
-				// Remove from user connections tracking
-				if userRooms, userExists := m.userConnections[userUUID]; userExists {
-					delete(userRooms, roomID)
-					if len(userRooms) == 0 {
-						delete(m.userConnections, userUUID)
-					}
-				}
-
-				// Remove empty rooms
-				if len(roomClients) == 0 {
-					delete(m.Rooms, roomID)
-					log.Printf("🏠 Room %d is now empty - removed", roomID)
-				}
-			}
-		}
-
-		// Remove client
-		delete(m.clients, client.ID)
-		close(client.Send)
-
-		log.Printf("🧹 Client %s unregistered (user: %s)", client.ID, userUUID)
-	}
+	m.unregister <- client
 }
 
-// Thêm hàm để client join/leave room sau khi đã connect
+// JoinRoom thêm hàm để client join/leave room sau khi đã connect
 func (m *Manager) JoinRoom(roomID int64, client *Client) error {
 	// Check if user is member of room (call to room service via callback)
-	isMember, err := m.roomMembershipCallback(client.UserUUID, roomID)
-	if err != nil {
-		return fmt.Errorf("failed to check room membership: %w", err)
-	}
+	if m.roomMembershipCallback != nil {
+		isMember, err := m.roomMembershipCallback(client.UserUUID, roomID)
+		if err != nil {
+			return fmt.Errorf("failed to check room membership: %w", err)
+		}
 
-	if !isMember {
-		return fmt.Errorf("user is not a member of room %d", roomID)
+		if !isMember {
+			return fmt.Errorf("user is not a member of room %d", roomID)
+		}
 	}
 
 	m.AddClientToRoom(roomID, client)
@@ -397,19 +438,16 @@ func (m *Manager) LeaveRoom(roomID int64, client *Client) {
 	m.SendToRoom(notification)
 }
 
-// RoomMembershipCheckFunc callback để kiểm tra quyền phòng
-type RoomMembershipCheckFunc func(userUUID uuid.UUID, roomID int64) (bool, error)
-
 func (m *Manager) SetRoomMembershipCallback(callback RoomMembershipCheckFunc) {
 	m.roomMembershipCallback = callback
 }
 
 // GetRoomInfo trả về thông tin clients trong phòng một cách an toàn
 func (m *Manager) GetRoomInfo(roomID int64) (map[string]*Client, bool) {
-	m.Mutex.RLock()
-	defer m.Mutex.RUnlock()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-	clients, exists := m.Rooms[roomID]
+	clients, exists := m.rooms[roomID]
 	if !exists {
 		return nil, false
 	}
@@ -420,16 +458,4 @@ func (m *Manager) GetRoomInfo(roomID int64) (map[string]*Client, bool) {
 		clientCopy[id] = client
 	}
 	return clientCopy, true
-}
-
-// CleanupRoom dọn dẹp queue khi phòng trống
-func (m *Manager) CleanupRoom(roomID int64) {
-	m.roomQueueMutex.Lock()
-	defer m.roomQueueMutex.Unlock()
-
-	if queue, exists := m.roomMessageQueues[roomID]; exists {
-		close(queue)
-		delete(m.roomMessageQueues, roomID)
-		log.Printf("Cleaned up queue for empty room %d", roomID)
-	}
 }

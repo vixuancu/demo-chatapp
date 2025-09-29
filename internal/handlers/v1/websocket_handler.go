@@ -37,6 +37,27 @@ type WebSocketHandler struct {
 	messageService services.MessageService
 	userService    services.UserService
 	jwtService     auth.TokenService
+
+	// Async message processing
+	messageQueue chan MessageTask
+	workerPool   chan chan MessageTask
+	quit         chan bool
+
+	// Caching
+	membershipCache *wsmanager.RoomMembershipCache
+}
+
+type MessageTask struct {
+	Message wsmanager.Message
+	Client  *wsmanager.Client
+}
+
+type Worker struct {
+	ID          int
+	Work        chan MessageTask
+	WorkerQueue chan chan MessageTask
+	QuitChan    chan bool
+	Handler     *WebSocketHandler
 }
 
 func NewWebSocketHandler(manager *wsmanager.Manager,
@@ -45,16 +66,88 @@ func NewWebSocketHandler(manager *wsmanager.Manager,
 	userService services.UserService,
 	jwtService auth.TokenService) *WebSocketHandler {
 
-	return &WebSocketHandler{
-		manager:        manager,
-		roomService:    roomService,
-		messageService: messageService,
-		userService:    userService,
-		jwtService:     jwtService,
+	// Create membership cache with 5 minute TTL
+	membershipCache := wsmanager.NewRoomMembershipCache(5 * time.Minute)
+
+	handler := &WebSocketHandler{
+		manager:         manager,
+		roomService:     roomService,
+		messageService:  messageService,
+		userService:     userService,
+		jwtService:      jwtService,
+		messageQueue:    make(chan MessageTask, 1000),    // Buffer 1000 messages
+		workerPool:      make(chan chan MessageTask, 10), // 10 workers
+		quit:            make(chan bool),
+		membershipCache: membershipCache,
+	}
+
+	// Start worker pool
+	handler.StartWorkerPool(10)
+
+	// Setup cached room membership callback
+	originalCallback := func(userUUID uuid.UUID, roomID int64) (bool, error) {
+		return roomService.IsUserMemberOfRoom(context.Background(), userUUID, roomID)
+	}
+	cachedCallback := wsmanager.CachedRoomMembershipCheckFunc(originalCallback, membershipCache)
+	manager.SetRoomMembershipCallback(cachedCallback)
+
+	return handler
+}
+
+// StartWorkerPool starts the worker pool for async message processing
+func (wh *WebSocketHandler) StartWorkerPool(numWorkers int) {
+	// Start dispatcher
+	go wh.dispatcher()
+
+	// Start workers
+	for i := 0; i < numWorkers; i++ {
+		worker := Worker{
+			ID:          i + 1,
+			Work:        make(chan MessageTask),
+			WorkerQueue: wh.workerPool,
+			QuitChan:    make(chan bool),
+			Handler:     wh,
+		}
+		go worker.Start()
 	}
 }
 
-// Sửa hàm HandleWebSocket để không yêu cầu room_id ban đầu
+// Dispatcher distributes work to available workers
+func (wh *WebSocketHandler) dispatcher() {
+	for {
+		select {
+		case work := <-wh.messageQueue:
+			// Get an available worker
+			go func() {
+				worker := <-wh.workerPool
+				worker <- work
+			}()
+		case <-wh.quit:
+			return
+		}
+	}
+}
+
+// Worker processes messages asynchronously
+func (w *Worker) Start() {
+	go func() {
+		for {
+			// Register worker in the worker queue
+			w.WorkerQueue <- w.Work
+
+			select {
+			case work := <-w.Work:
+				// Process the message
+				w.Handler.processMessageAsync(work)
+
+			case <-w.QuitChan:
+				return
+			}
+		}
+	}()
+}
+
+// HandleWebSocket xử lý kết nối WebSocket
 func (wh *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 	// Get token from query parameter
 	token := c.Query("token")
@@ -88,22 +181,17 @@ func (wh *WebSocketHandler) HandleWebSocket(c *gin.Context) {
 		return
 	}
 
-	// Create new client
+	// Create new client with configurable buffer size
 	client := &wsmanager.Client{
 		ID:       uuid.New().String(),
 		UserUUID: userID,
 		Conn:     conn,
-		Send:     make(chan []byte, 256),
+		Send:     make(chan []byte, 1024), // Increased buffer size
 		Rooms:    make(map[int64]bool),
 	}
 
 	// Register client
 	wh.manager.Register(client)
-
-	// Thiết lập callback để kiểm tra quyền phòng
-	wh.manager.SetRoomMembershipCallback(func(userUUID uuid.UUID, roomID int64) (bool, error) {
-		return wh.roomService.IsUserMemberOfRoom(context.Background(), userUUID, roomID)
-	})
 
 	// Optional: Auto-join room if room_id provided in query param
 	roomIDStr := c.Query("room_id")
@@ -154,7 +242,21 @@ func (wh *WebSocketHandler) readPump(client *wsmanager.Client) {
 		}
 
 		log.Printf("Received message from client %s: %s", client.ID, string(message))
-		wh.processMessage(message, client)
+		// Parse message quickly and queue for async processing
+		var msg wsmanager.Message
+		if err := json.Unmarshal(message, &msg); err != nil {
+			log.Printf("❌ Error parsing message from client %s: %v", client.ID, err)
+			continue
+		}
+
+		// Queue for async processing instead of blocking read loop
+		select {
+		case wh.messageQueue <- MessageTask{Message: msg, Client: client}:
+			// Queued successfully
+		default:
+			// Queue is full, log warning and skip
+			log.Printf("⚠️ Message queue full, dropping message from client %s", client.ID)
+		}
 	}
 }
 
@@ -191,128 +293,145 @@ func (wh *WebSocketHandler) writePump(client *wsmanager.Client) {
 	}
 }
 
-func (wh *WebSocketHandler) processMessage(data []byte, client *wsmanager.Client) {
-	// Parse message
-	var msg wsmanager.Message
-	if err := json.Unmarshal(data, &msg); err != nil {
-		log.Printf("❌ Error parsing message from client %s: %v", client.ID, err)
-		return
-	}
+// processMessageAsync processes messages in worker goroutines (non-blocking)
+func (wh *WebSocketHandler) processMessageAsync(task MessageTask) {
+	msg := task.Message
+	client := task.Client
 
 	log.Printf("📨 Processing message type '%s' from client %s for room %d", msg.Type, client.ID, msg.RoomID)
 
 	// Process based on message type
 	switch msg.Type {
 	case "join_room":
-		// Process join room request
-		roomID := msg.RoomID
-		err := wh.manager.JoinRoom(roomID, client)
-
-		response := wsmanager.Message{
-			Type:   "room_response",
-			RoomID: roomID,
-		}
-
-		if err != nil {
-			response.Content = fmt.Sprintf("Error joining room: %v", err)
-			response.Type = "error"
-		} else {
-			response.Content = "Successfully joined room"
-		}
-
-		if data, err := json.Marshal(response); err == nil {
-			client.Send <- data
-		}
-
+		wh.handleJoinRoom(msg, client)
 	case "leave_room":
-		// Process leave room request
-		roomID := msg.RoomID
-		wh.manager.LeaveRoom(roomID, client)
-
-		response := wsmanager.Message{
-			Type:    "room_response",
-			RoomID:  roomID,
-			Content: "Successfully left room",
-		}
-
-		if data, err := json.Marshal(response); err == nil {
-			client.Send <- data
-		}
-
+		wh.handleLeaveRoom(msg, client)
 	case "send_message":
-		// Kiểm tra xem client có trong room không
-		if !wh.manager.IsClientInRoom(msg.RoomID, client.ID) {
-			errMsg := wsmanager.Message{
-				Type:    "error",
-				Content: "You must join the room first",
-			}
-			if data, err := json.Marshal(errMsg); err == nil {
-				client.Send <- data
-			}
-			return
-		}
-
-		log.Printf("✅ Client %s is in room %d - processing message", client.ID, msg.RoomID)
-
-		// Create and save message to DB
-		params := sqlc.CreateMessageParams{
-			RoomID:   msg.RoomID,
-			UserUuid: client.UserUUID,
-			Content:  msg.Content,
-		}
-
-		message, err := wh.messageService.CreateMessage(context.Background(), params)
-		if err != nil {
-			log.Printf("❌ Error saving message to DB: %v", err)
-			errMsg := wsmanager.Message{
-				Type:    "error",
-				Content: "Failed to save message",
-			}
-			if data, err := json.Marshal(errMsg); err == nil {
-				client.Send <- data
-			}
-			return
-		}
-
-		log.Printf("✅ Message saved to DB with ID %d", message.MessageID)
-
-		// Get user info for broadcast
-		user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
-		if err != nil {
-			log.Printf("❌ Error getting user info: %v", err)
-			return
-		}
-
-		// Prepare message data with user info
-		messageData := map[string]interface{}{
-			"message_id":    message.MessageID,
-			"content":       message.Content,
-			"user_uuid":     message.UserUuid.String(),
-			"user_fullname": user.UserFullname,
-			"user_email":    user.UserEmail,
-			"created_at":    message.MessageCreatedAt.Format(time.RFC3339),
-		}
-
-		dataBytes, _ := json.Marshal(messageData)
-
-		// Broadcast message to room với thứ tự đảm bảo
-		broadcastMsg := wsmanager.Message{
-			Type:      "new_message",
-			RoomID:    message.RoomID,
-			UserUUID:  message.UserUuid,
-			Content:   message.Content,
-			Timestamp: message.MessageCreatedAt.Format(time.RFC3339),
-			Data:      dataBytes,
-			MessageID: &message.MessageID, // Thêm message_id để đảm bảo thứ tự
-			Priority:  1,                  // Priority cao cho tin nhắn thường
-		}
-
-		log.Printf("📡 Broadcasting message %d to room %d by user %s", message.MessageID, message.RoomID, user.UserFullname)
-		wh.manager.SendToRoom(broadcastMsg)
-		log.Printf("✅ Message broadcast completed")
-
+		wh.handleSendMessage(msg, client)
 	default:
 		log.Printf("❓ Unknown message type: %s", msg.Type)
+	}
+}
+
+// handleJoinRoom processes join room requests
+func (wh *WebSocketHandler) handleJoinRoom(msg wsmanager.Message, client *wsmanager.Client) {
+	roomID := msg.RoomID
+	err := wh.manager.JoinRoom(roomID, client)
+
+	response := wsmanager.Message{
+		Type:   "room_response",
+		RoomID: roomID,
+	}
+
+	if err != nil {
+		response.Content = fmt.Sprintf("Error joining room: %v", err)
+		response.Type = "error"
+	} else {
+		response.Content = "Successfully joined room"
+	}
+
+	wh.sendToClient(client, response)
+}
+
+// handleLeaveRoom processes leave room requests
+func (wh *WebSocketHandler) handleLeaveRoom(msg wsmanager.Message, client *wsmanager.Client) {
+	roomID := msg.RoomID
+	wh.manager.LeaveRoom(roomID, client)
+
+	response := wsmanager.Message{
+		Type:    "room_response",
+		RoomID:  roomID,
+		Content: "Successfully left room",
+	}
+
+	wh.sendToClient(client, response)
+}
+
+// handleSendMessage processes send message requests (async, DB operations)
+func (wh *WebSocketHandler) handleSendMessage(msg wsmanager.Message, client *wsmanager.Client) {
+	// Quick validation
+	if !wh.manager.IsClientInRoom(msg.RoomID, client.ID) {
+		errMsg := wsmanager.Message{
+			Type:    "error",
+			Content: "You must join the room first",
+		}
+		wh.sendToClient(client, errMsg)
+		return
+	}
+
+	log.Printf("✅ Client %s is in room %d - processing message", client.ID, msg.RoomID)
+
+	// Create and save message to DB
+	params := sqlc.CreateMessageParams{
+		RoomID:   msg.RoomID,
+		UserUuid: client.UserUUID,
+		Content:  msg.Content,
+	}
+
+	message, err := wh.messageService.CreateMessage(context.Background(), params)
+	if err != nil {
+		log.Printf("❌ Error saving message to DB: %v", err)
+		errMsg := wsmanager.Message{
+			Type:    "error",
+			Content: "Failed to save message",
+		}
+		wh.sendToClient(client, errMsg)
+		return
+	}
+
+	log.Printf("✅ Message saved to DB with ID %d", message.MessageID)
+
+	// Get user info for broadcast
+	user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
+	if err != nil {
+		log.Printf("❌ Error getting user info: %v", err)
+		return
+	}
+
+	// Prepare message data with user info
+	messageData := map[string]interface{}{
+		"message_id":    message.MessageID,
+		"content":       message.Content,
+		"user_uuid":     message.UserUuid.String(),
+		"user_fullname": user.UserFullname,
+		"user_email":    user.UserEmail,
+		"created_at":    message.MessageCreatedAt.Format(time.RFC3339),
+	}
+
+	dataBytes, _ := json.Marshal(messageData)
+
+	// Broadcast message to room với thứ tự đảm bảo
+	broadcastMsg := wsmanager.Message{
+		Type:      "new_message",
+		RoomID:    message.RoomID,
+		UserUUID:  message.UserUuid,
+		Content:   message.Content,
+		Timestamp: message.MessageCreatedAt.Format(time.RFC3339),
+		Data:      dataBytes,
+		MessageID: &message.MessageID,
+		Priority:  1,
+	}
+
+	log.Printf("📡 Broadcasting message %d to room %d by user %s", message.MessageID, message.RoomID, user.UserFullname)
+	wh.manager.SendToRoom(broadcastMsg)
+	log.Printf("✅ Message broadcast completed")
+}
+
+// sendToClient safely sends message to client with backpressure handling
+func (wh *WebSocketHandler) sendToClient(client *wsmanager.Client, msg wsmanager.Message) {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		log.Printf("❌ Error marshaling message: %v", err)
+		return
+	}
+
+	select {
+	case client.Send <- data:
+		// Sent successfully
+	default:
+		// Channel is full, client is slow - force disconnect
+		log.Printf("⚠️ Client %s send buffer full - disconnecting slow client", client.ID)
+		wh.manager.Unregister(client)
 	}
 }
 func (wh *WebSocketHandler) GetRoomStatus(c *gin.Context) {
