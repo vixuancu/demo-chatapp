@@ -24,13 +24,25 @@ type Querier interface {
 	GetRoomByID(ctx context.Context, roomID int64) (Room, error)
 	GetRoomMembers(ctx context.Context, roomID int64) ([]User, error)
 	GetRoomMessages(ctx context.Context, arg GetRoomMessagesParams) ([]Message, error)
+	// Cursor-based pagination: Load messages BEFORE a specific message_id
+	GetRoomMessagesWithCursor(ctx context.Context, arg GetRoomMessagesWithCursorParams) ([]Message, error)
+	GetRoomWithMembers(ctx context.Context, roomID int64) (GetRoomWithMembersRow, error)
+	GetTotalRoomsCount(ctx context.Context) (int64, error)
+	GetTotalUsersCount(ctx context.Context) (int64, error)
+	GetUnreadCount(ctx context.Context, arg GetUnreadCountParams) (int32, error)
 	GetUserByEmail(ctx context.Context, userEmail string) (User, error)
 	GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (User, error)
+	IncrementUnreadCount(ctx context.Context, arg IncrementUnreadCountParams) error
+	// Increment unread count for all members except sender
+	// Creates record if not exists (UPSERT)
+	IncrementUnreadCountsForAllMembers(ctx context.Context, arg IncrementUnreadCountsForAllMembersParams) error
 	IsUserMemberOfRoom(ctx context.Context, arg IsUserMemberOfRoomParams) (bool, error)
 	JoinRoom(ctx context.Context, arg JoinRoomParams) (RoomMember, error)
 	LeaveRoom(ctx context.Context, arg LeaveRoomParams) error
 	ListUserRooms(ctx context.Context, userUuid uuid.UUID) ([]Room, error)
 	ListUserRoomsWithLastMessage(ctx context.Context, userUuid uuid.UUID) ([]ListUserRoomsWithLastMessageRow, error)
+	MarkRoomAsRead(ctx context.Context, arg MarkRoomAsReadParams) error
+	UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) (User, error)
 }
 
 var _ Querier = (*Queries)(nil)

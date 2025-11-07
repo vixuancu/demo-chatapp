@@ -2,6 +2,7 @@ package v1Handler
 
 import (
 	"chat-app/internal/db/sqlc"
+	"chat-app/internal/repository"
 	"chat-app/internal/services/v1"
 	"chat-app/pkg/auth"
 	wsmanager "chat-app/pkg/websocket"
@@ -38,6 +39,9 @@ type WebSocketHandler struct {
 	userService    services.UserService
 	jwtService     auth.TokenService
 
+	// Repository for direct database access
+	roomRepo repository.RoomRepository
+
 	// Async message processing
 	messageQueue chan MessageTask
 	workerPool   chan chan MessageTask
@@ -64,7 +68,8 @@ func NewWebSocketHandler(manager *wsmanager.Manager,
 	roomService services.RoomService,
 	messageService services.MessageService,
 	userService services.UserService,
-	jwtService auth.TokenService) *WebSocketHandler {
+	jwtService auth.TokenService,
+	roomRepo repository.RoomRepository) *WebSocketHandler {
 
 	// Create membership cache with 5 minute TTL
 	membershipCache := wsmanager.NewRoomMembershipCache(5 * time.Minute)
@@ -75,6 +80,7 @@ func NewWebSocketHandler(manager *wsmanager.Manager,
 		messageService:  messageService,
 		userService:     userService,
 		jwtService:      jwtService,
+		roomRepo:        roomRepo,
 		messageQueue:    make(chan MessageTask, 1000),    // Buffer 1000 messages
 		workerPool:      make(chan chan MessageTask, 10), // 10 workers
 		quit:            make(chan bool),
@@ -308,6 +314,8 @@ func (wh *WebSocketHandler) processMessageAsync(task MessageTask) {
 		wh.handleLeaveRoom(msg, client)
 	case "send_message":
 		wh.handleSendMessage(msg, client)
+	case "typing_start", "typing_stop":
+		wh.handleTypingIndicator(msg, client)
 	default:
 		log.Printf("❓ Unknown message type: %s", msg.Type)
 	}
@@ -326,16 +334,78 @@ func (wh *WebSocketHandler) handleJoinRoom(msg wsmanager.Message, client *wsmana
 	if err != nil {
 		response.Content = fmt.Sprintf("Error joining room: %v", err)
 		response.Type = "error"
-	} else {
-		response.Content = "Successfully joined room"
+		wh.sendToClient(client, response)
+		return
 	}
 
+	response.Content = "Successfully joined room"
 	wh.sendToClient(client, response)
+
+	// ✅ Broadcast "user_joined" event to ALL members
+	// Get user info
+	user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
+	if err != nil {
+		log.Printf("❌ Error getting user info for join broadcast: %v", err)
+		return
+	}
+
+	// Get ALL members of this room
+	members, err := wh.roomRepo.GetRoomMembers(context.Background(), roomID)
+	if err != nil {
+		log.Printf("❌ Error getting room members for join broadcast: %v", err)
+		return
+	}
+
+	memberUUIDs := make([]uuid.UUID, 0, len(members))
+	for _, member := range members {
+		memberUUIDs = append(memberUUIDs, member.UserUuid)
+	}
+
+	// Prepare join event data
+	joinData := map[string]interface{}{
+		"user_uuid":     client.UserUUID.String(),
+		"user_fullname": user.UserFullname,
+		"user_email":    user.UserEmail,
+		"member_count":  len(memberUUIDs),
+	}
+	joinDataBytes, _ := json.Marshal(joinData)
+
+	// Broadcast to ALL members
+	joinEvent := wsmanager.Message{
+		Type:      "user_joined",
+		RoomID:    roomID,
+		UserUUID:  client.UserUUID,
+		Data:      joinDataBytes,
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
+	log.Printf("📤 Broadcasting 'user_joined' to %d members of room %d", len(memberUUIDs), roomID)
+	sentCount := wh.manager.BroadcastToUsers(joinEvent, memberUUIDs)
+	log.Printf("✅ Join broadcast completed: %d/%d members notified", sentCount, len(memberUUIDs))
 }
 
 // handleLeaveRoom processes leave room requests
 func (wh *WebSocketHandler) handleLeaveRoom(msg wsmanager.Message, client *wsmanager.Client) {
 	roomID := msg.RoomID
+
+	// Get members BEFORE leaving
+	members, err := wh.roomRepo.GetRoomMembers(context.Background(), roomID)
+	if err != nil {
+		log.Printf("❌ Error getting room members for leave broadcast: %v", err)
+	}
+
+	memberUUIDs := make([]uuid.UUID, 0, len(members))
+	for _, member := range members {
+		memberUUIDs = append(memberUUIDs, member.UserUuid)
+	}
+
+	// Get user info
+	user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
+	if err != nil {
+		log.Printf("❌ Error getting user info for leave broadcast: %v", err)
+	}
+
+	// Leave the room
 	wh.manager.LeaveRoom(roomID, client)
 
 	response := wsmanager.Message{
@@ -345,6 +415,28 @@ func (wh *WebSocketHandler) handleLeaveRoom(msg wsmanager.Message, client *wsman
 	}
 
 	wh.sendToClient(client, response)
+
+	// ✅ Broadcast "user_left" event to ALL members
+	if len(memberUUIDs) > 0 && user.UserUuid != uuid.Nil {
+		leaveData := map[string]interface{}{
+			"user_uuid":     client.UserUUID.String(),
+			"user_fullname": user.UserFullname,
+			"member_count":  len(memberUUIDs) - 1, // Minus 1 because user already left
+		}
+		leaveDataBytes, _ := json.Marshal(leaveData)
+
+		leaveEvent := wsmanager.Message{
+			Type:      "user_left",
+			RoomID:    roomID,
+			UserUUID:  client.UserUUID,
+			Data:      leaveDataBytes,
+			Timestamp: time.Now().Format(time.RFC3339),
+		}
+
+		log.Printf("📤 Broadcasting 'user_left' to %d members of room %d", len(memberUUIDs), roomID)
+		sentCount := wh.manager.BroadcastToUsers(leaveEvent, memberUUIDs)
+		log.Printf("✅ Leave broadcast completed: %d/%d members notified", sentCount, len(memberUUIDs))
+	}
 }
 
 // handleSendMessage processes send message requests (async, DB operations)
@@ -381,6 +473,29 @@ func (wh *WebSocketHandler) handleSendMessage(msg wsmanager.Message, client *wsm
 
 	log.Printf("✅ Message saved to DB with ID %d", message.MessageID)
 
+	// ✅ STEP 1: Get ALL members of this room from database
+	members, err := wh.roomRepo.GetRoomMembers(context.Background(), msg.RoomID)
+	if err != nil {
+		log.Printf("❌ Error getting room members: %v", err)
+		return
+	}
+
+	memberUUIDs := make([]uuid.UUID, 0, len(members))
+	for _, member := range members {
+		memberUUIDs = append(memberUUIDs, member.UserUuid)
+	}
+
+	log.Printf("📤 Broadcasting to %d members of room %d", len(memberUUIDs), msg.RoomID)
+
+	// ✅ STEP 2: Increment unread_count for all members EXCEPT sender
+	err = wh.roomService.IncrementUnreadCountsForMembers(context.Background(), msg.RoomID, client.UserUUID)
+	if err != nil {
+		log.Printf("⚠️ Error incrementing unread counts: %v", err)
+		// Don't return - continue with broadcast even if unread increment fails
+	} else {
+		log.Printf("✅ Incremented unread counts for room %d members (excluding sender %s)", msg.RoomID, client.UserUUID)
+	}
+
 	// Get user info for broadcast
 	user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
 	if err != nil {
@@ -391,18 +506,19 @@ func (wh *WebSocketHandler) handleSendMessage(msg wsmanager.Message, client *wsm
 	// Prepare message data with user info
 	messageData := map[string]interface{}{
 		"message_id":    message.MessageID,
-		"content":       message.Content,
+		"room_id":       message.RoomID,
 		"user_uuid":     message.UserUuid.String(),
 		"user_fullname": user.UserFullname,
 		"user_email":    user.UserEmail,
+		"content":       message.Content,
 		"created_at":    message.MessageCreatedAt.Format(time.RFC3339),
 	}
 
 	dataBytes, _ := json.Marshal(messageData)
 
-	// Broadcast message to room với thứ tự đảm bảo
+	// ✅ STEP 3: Broadcast "message" event to ALL members (not just online in room)
 	broadcastMsg := wsmanager.Message{
-		Type:      "new_message",
+		Type:      "message",
 		RoomID:    message.RoomID,
 		UserUUID:  message.UserUuid,
 		Content:   message.Content,
@@ -412,28 +528,84 @@ func (wh *WebSocketHandler) handleSendMessage(msg wsmanager.Message, client *wsm
 		Priority:  1,
 	}
 
-	log.Printf("📡 Broadcasting message %d to room %d by user %s", message.MessageID, message.RoomID, user.UserFullname)
-	wh.manager.SendToRoom(broadcastMsg)
-	log.Printf("✅ Message broadcast completed")
+	log.Printf("📡 Broadcasting 'message' event to ALL %d members of room %d", len(memberUUIDs), message.RoomID)
+	sentCount := wh.manager.BroadcastToUsers(broadcastMsg, memberUUIDs)
+	log.Printf("✅ Message broadcast completed: %d/%d members received", sentCount, len(memberUUIDs))
 }
 
 // sendToClient safely sends message to client with backpressure handling
 func (wh *WebSocketHandler) sendToClient(client *wsmanager.Client, msg wsmanager.Message) {
+	// Recover from panic if channel is closed
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️ Recovered from panic in sendToClient for client %s: %v", client.ID, r)
+		}
+	}()
+
 	data, err := json.Marshal(msg)
 	if err != nil {
 		log.Printf("❌ Error marshaling message: %v", err)
 		return
 	}
 
+	// Use select with timeout to avoid blocking forever
 	select {
 	case client.Send <- data:
 		// Sent successfully
+	case <-time.After(100 * time.Millisecond):
+		// Timeout - client is probably disconnected or slow
+		log.Printf("⚠️ Client %s send timeout - skipping message", client.ID)
 	default:
-		// Channel is full, client is slow - force disconnect
-		log.Printf("⚠️ Client %s send buffer full - disconnecting slow client", client.ID)
-		wh.manager.Unregister(client)
+		// Channel is full, client is slow - skip message
+		log.Printf("⚠️ Client %s send buffer full - skipping message", client.ID)
 	}
 }
+
+// handleTypingIndicator broadcasts typing status to other room members
+func (wh *WebSocketHandler) handleTypingIndicator(msg wsmanager.Message, client *wsmanager.Client) {
+	// Validate that client is in the room
+	if !client.Rooms[msg.RoomID] {
+		log.Printf("⚠️ Client %s not in room %d, cannot send typing indicator", client.ID, msg.RoomID)
+		return
+	}
+
+	// Get user info for the typing indicator
+	user, err := wh.userService.GetUserByUUIDWithContext(context.Background(), client.UserUUID.String())
+	if err != nil {
+		log.Printf("❌ Error getting user info for typing indicator: %v", err)
+		return
+	}
+
+	// Broadcast typing indicator to all room members EXCEPT sender
+	broadcastMsg := wsmanager.Message{
+		Type:     msg.Type, // "typing_start" or "typing_stop"
+		RoomID:   msg.RoomID,
+		UserUUID: client.UserUUID,
+		Data: json.RawMessage(fmt.Sprintf(`{
+			"user_uuid": "%s",
+			"fullname": "%s"
+		}`, user.UserUuid, user.UserFullname)),
+	}
+
+	// Get room members and broadcast
+	members, err := wh.roomRepo.GetRoomMembers(context.Background(), msg.RoomID)
+	if err != nil {
+		log.Printf("❌ Error getting room members for typing indicator: %v", err)
+		return
+	}
+
+	memberUUIDs := make([]uuid.UUID, 0, len(members))
+	for _, member := range members {
+		// Exclude sender from typing broadcast
+		if member.UserUuid != client.UserUUID {
+			memberUUIDs = append(memberUUIDs, member.UserUuid)
+		}
+	}
+
+	log.Printf("📡 Broadcasting %s from %s to %d members in room %d", msg.Type, user.UserFullname, len(memberUUIDs), msg.RoomID)
+	wh.manager.BroadcastToUsers(broadcastMsg, memberUUIDs)
+}
+
 func (wh *WebSocketHandler) GetRoomStatus(c *gin.Context) {
 	roomIDStr := c.Param("roomID")
 	roomID, err := strconv.ParseInt(roomIDStr, 10, 64)

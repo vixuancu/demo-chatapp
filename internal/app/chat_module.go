@@ -38,6 +38,7 @@ func NewChatModule(ctx *ModuleContext) *ChatModule {
 		messageService,
 		userService,
 		jwtService,
+		roomRepo, // Add roomRepo for direct database access
 	)
 
 	// init Message handler

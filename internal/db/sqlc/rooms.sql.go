@@ -206,6 +206,115 @@ func (q *Queries) GetRoomMembers(ctx context.Context, roomID int64) ([]User, err
 	return items, nil
 }
 
+const getRoomWithMembers = `-- name: GetRoomWithMembers :one
+SELECT 
+    r.room_id,
+    r.room_code,
+    r.room_name,
+    r.room_is_direct_chat,
+    r.room_created_by,
+    r.room_created_at,
+    r.room_updated_at,
+    (SELECT COUNT(*) FROM room_members WHERE room_id = r.room_id) as member_count
+FROM rooms r
+WHERE r.room_id = $1
+`
+
+type GetRoomWithMembersRow struct {
+	RoomID           int64     `json:"room_id"`
+	RoomCode         string    `json:"room_code"`
+	RoomName         *string   `json:"room_name"`
+	RoomIsDirectChat bool      `json:"room_is_direct_chat"`
+	RoomCreatedBy    uuid.UUID `json:"room_created_by"`
+	RoomCreatedAt    time.Time `json:"room_created_at"`
+	RoomUpdatedAt    time.Time `json:"room_updated_at"`
+	MemberCount      int64     `json:"member_count"`
+}
+
+func (q *Queries) GetRoomWithMembers(ctx context.Context, roomID int64) (GetRoomWithMembersRow, error) {
+	row := q.db.QueryRow(ctx, getRoomWithMembers, roomID)
+	var i GetRoomWithMembersRow
+	err := row.Scan(
+		&i.RoomID,
+		&i.RoomCode,
+		&i.RoomName,
+		&i.RoomIsDirectChat,
+		&i.RoomCreatedBy,
+		&i.RoomCreatedAt,
+		&i.RoomUpdatedAt,
+		&i.MemberCount,
+	)
+	return i, err
+}
+
+const getTotalRoomsCount = `-- name: GetTotalRoomsCount :one
+SELECT COUNT(*) FROM rooms
+`
+
+func (q *Queries) GetTotalRoomsCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, getTotalRoomsCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const getUnreadCount = `-- name: GetUnreadCount :one
+SELECT COALESCE(unread_count, 0) as unread_count
+FROM room_read_status
+WHERE user_uuid = $1 AND room_id = $2
+`
+
+type GetUnreadCountParams struct {
+	UserUuid uuid.UUID `json:"user_uuid"`
+	RoomID   int64     `json:"room_id"`
+}
+
+func (q *Queries) GetUnreadCount(ctx context.Context, arg GetUnreadCountParams) (int32, error) {
+	row := q.db.QueryRow(ctx, getUnreadCount, arg.UserUuid, arg.RoomID)
+	var unread_count int32
+	err := row.Scan(&unread_count)
+	return unread_count, err
+}
+
+const incrementUnreadCount = `-- name: IncrementUnreadCount :exec
+UPDATE room_read_status
+SET unread_count = unread_count + 1
+WHERE user_uuid = $1 AND room_id = $2
+`
+
+type IncrementUnreadCountParams struct {
+	UserUuid uuid.UUID `json:"user_uuid"`
+	RoomID   int64     `json:"room_id"`
+}
+
+func (q *Queries) IncrementUnreadCount(ctx context.Context, arg IncrementUnreadCountParams) error {
+	_, err := q.db.Exec(ctx, incrementUnreadCount, arg.UserUuid, arg.RoomID)
+	return err
+}
+
+const incrementUnreadCountsForAllMembers = `-- name: IncrementUnreadCountsForAllMembers :exec
+INSERT INTO room_read_status (user_uuid, room_id, unread_count, last_read_at)
+SELECT rm.user_uuid, $1, 1, NOW()
+FROM room_members rm
+WHERE rm.room_id = $1 
+  AND rm.user_uuid != $2
+ON CONFLICT (user_uuid, room_id)
+DO UPDATE SET 
+    unread_count = room_read_status.unread_count + 1
+`
+
+type IncrementUnreadCountsForAllMembersParams struct {
+	RoomID   int64     `json:"room_id"`
+	UserUuid uuid.UUID `json:"user_uuid"`
+}
+
+// Increment unread count for all members except sender
+// Creates record if not exists (UPSERT)
+func (q *Queries) IncrementUnreadCountsForAllMembers(ctx context.Context, arg IncrementUnreadCountsForAllMembersParams) error {
+	_, err := q.db.Exec(ctx, incrementUnreadCountsForAllMembers, arg.RoomID, arg.UserUuid)
+	return err
+}
+
 const isUserMemberOfRoom = `-- name: IsUserMemberOfRoom :one
 SELECT EXISTS (
         SELECT 1
@@ -253,8 +362,7 @@ func (q *Queries) JoinRoom(ctx context.Context, arg JoinRoomParams) (RoomMember,
 }
 
 const leaveRoom = `-- name: LeaveRoom :exec
-DELETE FROM room_members 
-WHERE user_uuid = $1 AND room_id = $2
+DELETE FROM room_members WHERE user_uuid = $1 AND room_id = $2
 `
 
 type LeaveRoomParams struct {
@@ -318,7 +426,11 @@ SELECT
     COALESCE(lm.content, '') as last_message_content,
     COALESCE(lm.message_created_at, r.room_created_at) as last_message_time,
     COALESCE(lm.user_uuid, '00000000-0000-0000-0000-000000000000'::uuid) as last_sender_uuid,
-    u.user_fullname as last_sender_name
+    u.user_fullname as last_sender_name,
+    -- Unread count from room_read_status
+    COALESCE(rrs.unread_count, 0) as unread_count,
+    -- Member count
+    (SELECT COUNT(*) FROM room_members WHERE room_id = r.room_id) as member_count
 FROM rooms r
 INNER JOIN room_members rm ON r.room_id = rm.room_id
 LEFT JOIN LATERAL (
@@ -329,6 +441,7 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) lm ON true
 LEFT JOIN users u ON lm.user_uuid = u.user_uuid
+LEFT JOIN room_read_status rrs ON rrs.user_uuid = $1 AND rrs.room_id = r.room_id
 WHERE rm.user_uuid = $1
 ORDER BY COALESCE(lm.message_created_at, r.room_created_at) DESC
 `
@@ -346,6 +459,8 @@ type ListUserRoomsWithLastMessageRow struct {
 	LastMessageTime    time.Time `json:"last_message_time"`
 	LastSenderUuid     uuid.UUID `json:"last_sender_uuid"`
 	LastSenderName     *string   `json:"last_sender_name"`
+	UnreadCount        int32     `json:"unread_count"`
+	MemberCount        int64     `json:"member_count"`
 }
 
 func (q *Queries) ListUserRoomsWithLastMessage(ctx context.Context, userUuid uuid.UUID) ([]ListUserRoomsWithLastMessageRow, error) {
@@ -370,6 +485,8 @@ func (q *Queries) ListUserRoomsWithLastMessage(ctx context.Context, userUuid uui
 			&i.LastMessageTime,
 			&i.LastSenderUuid,
 			&i.LastSenderName,
+			&i.UnreadCount,
+			&i.MemberCount,
 		); err != nil {
 			return nil, err
 		}
@@ -379,4 +496,25 @@ func (q *Queries) ListUserRoomsWithLastMessage(ctx context.Context, userUuid uui
 		return nil, err
 	}
 	return items, nil
+}
+
+const markRoomAsRead = `-- name: MarkRoomAsRead :exec
+INSERT INTO room_read_status (user_uuid, room_id, unread_count, last_read_message_id, last_read_at)
+VALUES ($1, $2, 0, $3, NOW())
+ON CONFLICT (user_uuid, room_id) 
+DO UPDATE SET 
+    unread_count = 0,
+    last_read_message_id = EXCLUDED.last_read_message_id,
+    last_read_at = NOW()
+`
+
+type MarkRoomAsReadParams struct {
+	UserUuid          uuid.UUID `json:"user_uuid"`
+	RoomID            int64     `json:"room_id"`
+	LastReadMessageID *int64    `json:"last_read_message_id"`
+}
+
+func (q *Queries) MarkRoomAsRead(ctx context.Context, arg MarkRoomAsReadParams) error {
+	_, err := q.db.Exec(ctx, markRoomAsRead, arg.UserUuid, arg.RoomID, arg.LastReadMessageID)
+	return err
 }

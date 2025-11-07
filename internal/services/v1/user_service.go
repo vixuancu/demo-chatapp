@@ -92,6 +92,18 @@ func (us *userService) GetAllUsers(ctx *gin.Context, limit, offset int32) ([]sql
 	return users, nil
 }
 
+func (us *userService) GetTotalUsersCount(ctx *gin.Context) (int64, error) {
+	context := ctx.Request.Context()
+
+	// Get total count of users
+	count, err := us.userRepo.GetTotalUsersCount(context)
+	if err != nil {
+		return 0, utils.WrapError(err, "could not get users count", utils.ErrorCodeInternalServer)
+	}
+
+	return count, nil
+}
+
 func (us *userService) DeleteUser(ctx *gin.Context, userUUID string) error {
 	context := ctx.Request.Context()
 
@@ -108,4 +120,28 @@ func (us *userService) DeleteUser(ctx *gin.Context, userUUID string) error {
 	}
 
 	return nil
+}
+
+func (us *userService) UpdateUserRole(ctx *gin.Context, userUUID string, role string) (sqlc.User, error) {
+	context := ctx.Request.Context()
+
+	// Parse UUID
+	uuid, err := parseUUID(userUUID)
+	if err != nil {
+		return sqlc.User{}, utils.NewError("invalid user ID", utils.ErrorCodeBadRequest)
+	}
+
+	// Check if user exists
+	_, err = us.userRepo.GetUserByUUID(context, uuid)
+	if err != nil {
+		return sqlc.User{}, utils.NewError("user not found", utils.ErrorCodeNotFound)
+	}
+
+	// Update user role
+	user, err := us.userRepo.UpdateUserRole(context, uuid, role)
+	if err != nil {
+		return sqlc.User{}, utils.WrapError(err, "could not update user role", utils.ErrorCodeInternalServer)
+	}
+
+	return user, nil
 }

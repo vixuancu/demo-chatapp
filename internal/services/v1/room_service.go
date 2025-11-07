@@ -198,6 +198,17 @@ func (rs *roomService) GetAllRooms(ctx *gin.Context, limit, offset int32) ([]sql
 	return rooms, nil
 }
 
+func (rs *roomService) GetTotalRoomsCount(ctx *gin.Context) (int64, error) {
+	context := ctx.Request.Context()
+
+	count, err := rs.roomRepo.GetTotalRoomsCount(context)
+	if err != nil {
+		return 0, utils.WrapError(err, "could not get room count", utils.ErrorCodeInternalServer)
+	}
+
+	return count, nil
+}
+
 func (rs *roomService) GetRoomByID(ctx *gin.Context, roomID int64) (sqlc.Room, error) {
 	context := ctx.Request.Context()
 
@@ -217,5 +228,66 @@ func (rs *roomService) DeleteRoom(ctx *gin.Context, roomID int64) error {
 		return utils.WrapError(err, "could not delete room", utils.ErrorCodeInternalServer)
 	}
 
+	return nil
+}
+
+// GetRoomWithMembers returns room details with members list and member count
+func (rs *roomService) GetRoomWithMembers(ctx *gin.Context, roomID int64, userUUID uuid.UUID) (map[string]interface{}, error) {
+	context := ctx.Request.Context()
+
+	// Check if user is member of this room
+	isMember, err := rs.roomRepo.IsUserMemberOfRoom(context, userUUID, roomID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
+
+	if !isMember {
+		return nil, utils.NewError("you are not a member of this room", utils.ErrorCodeForbidden)
+	}
+
+	// Get room with member count
+	room, err := rs.roomRepo.GetRoomWithMembers(context, roomID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get room", utils.ErrorCodeNotFound)
+	}
+
+	// Get members list
+	members, err := rs.roomRepo.GetRoomMembers(context, roomID)
+	if err != nil {
+		return nil, utils.WrapError(err, "could not get room members", utils.ErrorCodeInternalServer)
+	}
+
+	// Build response
+	response := map[string]interface{}{
+		"room_id":             room.RoomID,
+		"room_code":           room.RoomCode,
+		"room_name":           room.RoomName,
+		"room_is_direct_chat": room.RoomIsDirectChat,
+		"room_created_by":     room.RoomCreatedBy.String(),
+		"room_created_at":     room.RoomCreatedAt,
+		"room_updated_at":     room.RoomUpdatedAt,
+		"member_count":        room.MemberCount,
+		"members":             members,
+	}
+
+	return response, nil
+}
+
+// Unread count methods
+func (rs *roomService) IncrementUnreadCountsForMembers(ctx context.Context, roomID int64, senderUUID uuid.UUID) error {
+	// Increment unread_count for all members EXCEPT sender
+	err := rs.roomRepo.IncrementUnreadCountsForAllMembers(ctx, roomID, senderUUID)
+	if err != nil {
+		return utils.WrapError(err, "could not increment unread counts", utils.ErrorCodeInternalServer)
+	}
+	return nil
+}
+
+func (rs *roomService) MarkRoomAsRead(ctx context.Context, userUUID uuid.UUID, roomID int64, lastMessageID int64) error {
+	// Reset unread_count to 0 and update last_read_message_id
+	err := rs.roomRepo.MarkRoomAsRead(ctx, userUUID, roomID, lastMessageID)
+	if err != nil {
+		return utils.WrapError(err, "could not mark room as read", utils.ErrorCodeInternalServer)
+	}
 	return nil
 }

@@ -36,6 +36,14 @@ type RoomMember struct {
 	RoomMemberUpdatedAt time.Time `json:"room_member_updated_at"`
 }
 
+type RoomReadStatus struct {
+	UserUuid          uuid.UUID  `json:"user_uuid"`
+	RoomID            int64      `json:"room_id"`
+	UnreadCount       int32      `json:"unread_count"`
+	LastReadMessageID *int64     `json:"last_read_message_id"`
+	LastReadAt        *time.Time `json:"last_read_at"`
+}
+
 type User struct {
 	UserUuid      uuid.UUID `json:"user_uuid"`
 	UserEmail     string    `json:"user_email"`

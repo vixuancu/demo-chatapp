@@ -41,4 +41,6 @@ migrate-goto:
 # run server
 server:
 	go run ./cmd/api
-.PHONY: start-container remove-container stop-container start-container restart-container
+build:
+	go build -o bin/app ./cmd/api
+.PHONY: start-container remove-container stop-container start-container restart-container sqlc migrate-create migrate-up migrate-down migrate-down-n migrate-force migrate-drop migrate-goto server build

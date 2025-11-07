@@ -11,7 +11,7 @@ CREATE TABLE users (
     user_created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian tạo
     user_updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), -- Thời gian cập nhật gần nhất
     CONSTRAINT chk_user_role CHECK (
-        user_role IN ('Admin', 'Member')
+        user_role IN ('ppppp                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               ,', 'Member')
     ) -- Chỉ cho phép 2 role
 );
 
@@ -115,7 +115,43 @@ AFTER INSERT ON messages
 FOR EACH ROW
 EXECUTE FUNCTION update_room_timestamp_on_new_message();
 
+-- Bảng room_read_status: Theo dõi unread count của từng user trong từng phòng
+CREATE TABLE room_read_status (
+    user_uuid UUID NOT NULL, -- Người dùng
+    room_id BIGINT NOT NULL, -- Phòng chat
+    unread_count INT NOT NULL DEFAULT 0, -- Số tin nhắn chưa đọc
+    last_read_message_id BIGINT, -- ID tin nhắn cuối cùng đã đọc (NULL nếu chưa đọc gì)
+    last_read_at TIMESTAMPTZ, -- Thời gian đọc tin nhắn cuối cùng
+    CONSTRAINT pk_room_read_status PRIMARY KEY (user_uuid, room_id),
+    CONSTRAINT fk_user_read_status FOREIGN KEY (user_uuid) REFERENCES users (user_uuid) ON DELETE CASCADE,
+    CONSTRAINT fk_room_read_status FOREIGN KEY (room_id) REFERENCES rooms (room_id) ON DELETE CASCADE,
+    CONSTRAINT fk_last_read_message FOREIGN KEY (last_read_message_id) REFERENCES messages (message_id) ON DELETE SET NULL,
+    CONSTRAINT chk_unread_count CHECK (unread_count >= 0) -- Không cho phép số âm
+);
+
+-- Trigger: Tự động tạo room_read_status khi user join room (unread_count = 0)
+CREATE OR REPLACE FUNCTION create_room_read_status_on_join()
+RETURNS TRIGGER AS $$
+BEGIN
+    INSERT INTO room_read_status (user_uuid, room_id, unread_count, last_read_at)
+    VALUES (NEW.user_uuid, NEW.room_id, 0, NOW())
+    ON CONFLICT (user_uuid, room_id) DO NOTHING; -- Tránh duplicate nếu đã tồn tại
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE TRIGGER trigger_create_room_read_status
+AFTER INSERT ON room_members
+FOR EACH ROW
+EXECUTE FUNCTION create_room_read_status_on_join();
+
 -- Chỉ mục để tối ưu hóa truy vấn ====== primary key,unique đã có index tự động ======
 
 -- Tìm kiếm các phòng của user (load user's rooms)
 CREATE INDEX idx_room_members_user_uuid ON room_members (user_uuid);
+
+-- Tìm kiếm room_read_status của user (check unread count)
+CREATE INDEX idx_room_read_status_user ON room_read_status (user_uuid);
+
+-- Tìm kiếm room_read_status theo room (increment unread cho tất cả members)
+CREATE INDEX idx_room_read_status_room ON room_read_status (room_id);

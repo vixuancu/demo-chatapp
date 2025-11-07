@@ -29,37 +29,59 @@ type AdminRoomResponse struct {
 
 // GetAllUsers godoc
 // @Summary [Admin] Get all users
-// @Description Get list of all users (Admin only)
+// @Description Get list of all users with pagination (Admin only)
 // @Tags admin
 // @Produce json
-// @Param limit query int false "Limit (default 50)"
-// @Param offset query int false "Offset (default 0)"
-// @Success 200 {object} utils.Response{data=[]sqlc.User}
+// @Param page query int false "Page number (default 1)"
+// @Param per_page query int false "Items per page (default 10, max 100)"
+// @Success 200 {object} utils.Response{data=object{users=[]sqlc.User,total=int,page=int,per_page=int,total_pages=int}}
 // @Failure 403 {object} utils.ErrorResponse
 // @Router /api/v1/admin/users [get]
 func (ah *AdminHandler) GetAllUsers(c *gin.Context) {
-	// Parse query parameters
-	limitStr := c.DefaultQuery("limit", "50")
-	offsetStr := c.DefaultQuery("offset", "0")
+	// Parse pagination parameters
+	pageStr := c.DefaultQuery("page", "1")
+	perPageStr := c.DefaultQuery("per_page", "10")
 
-	limit, err := strconv.ParseInt(limitStr, 10, 32)
-	if err != nil || limit < 1 || limit > 100 {
-		limit = 50
+	page, err := strconv.ParseInt(pageStr, 10, 32)
+	if err != nil || page < 1 {
+		page = 1
 	}
 
-	offset, err := strconv.ParseInt(offsetStr, 10, 32)
-	if err != nil || offset < 0 {
-		offset = 0
+	perPage, err := strconv.ParseInt(perPageStr, 10, 32)
+	if err != nil || perPage < 1 || perPage > 100 {
+		perPage = 10
 	}
 
-	// Get all users
-	users, err := ah.userService.GetAllUsers(c, int32(limit), int32(offset))
+	// Calculate offset
+	offset := (page - 1) * perPage
+
+	// Get all users with count
+	users, err := ah.userService.GetAllUsers(c, int32(perPage), int32(offset))
 	if err != nil {
 		utils.ResponseError(c, err)
 		return
 	}
 
-	utils.ResponseSuccess(c, "Users retrieved successfully", users)
+	// Get total count for pagination
+	totalUsers, err := ah.userService.GetTotalUsersCount(c)
+	if err != nil {
+		utils.ResponseError(c, err)
+		return
+	}
+
+	// Calculate total pages
+	totalPages := (totalUsers + int64(perPage) - 1) / int64(perPage)
+
+	// Prepare paginated response
+	response := gin.H{
+		"users":       users,
+		"total":       totalUsers,
+		"page":        page,
+		"per_page":    perPage,
+		"total_pages": totalPages,
+	}
+
+	utils.ResponseSuccess(c, "Users retrieved successfully", response)
 }
 
 // GetAllRooms godoc
@@ -67,20 +89,35 @@ func (ah *AdminHandler) GetAllUsers(c *gin.Context) {
 // @Description Get list of all rooms with member statistics (Admin only)
 // @Tags admin
 // @Produce json
-// @Success 200 {object} utils.Response{data=[]AdminRoomResponse}
+// @Param page query int false "Page number" default(1)
+// @Param per_page query int false "Items per page" default(10)
+// @Success 200 {object} utils.Response{data=map[string]interface{}}
 // @Failure 403 {object} utils.ErrorResponse
 // @Router /api/v1/admin/rooms [get]
 func (ah *AdminHandler) GetAllRooms(c *gin.Context) {
 	// Parse pagination parameters
-	limit := int32(20) // default limit
-	offset := int32(0) // default offset
+	page := utils.ParseQueryInt(c, "page", 1)
+	perPage := utils.ParseQueryInt(c, "per_page", 10)
+
+	// Calculate offset
+	offset := (page - 1) * perPage
 
 	// Get all rooms with member count
-	rooms, err := ah.roomService.GetAllRooms(c, limit, offset)
+	rooms, err := ah.roomService.GetAllRooms(c, int32(perPage), int32(offset))
 	if err != nil {
 		utils.ResponseError(c, err)
 		return
 	}
+
+	// Get total count
+	totalRooms, err := ah.roomService.GetTotalRoomsCount(c)
+	if err != nil {
+		utils.ResponseError(c, err)
+		return
+	}
+
+	// Calculate total pages
+	totalPages := (totalRooms + int64(perPage) - 1) / int64(perPage)
 
 	// Create response using the data from GetAllRoomsWithMemberCount
 	var adminRooms []AdminRoomResponse
@@ -100,7 +137,16 @@ func (ah *AdminHandler) GetAllRooms(c *gin.Context) {
 		adminRooms = append(adminRooms, adminRoom)
 	}
 
-	utils.ResponseSuccess(c, "Rooms retrieved successfully", adminRooms)
+	// Return paginated response
+	response := gin.H{
+		"rooms":       adminRooms,
+		"total":       totalRooms,
+		"page":        page,
+		"per_page":    perPage,
+		"total_pages": totalPages,
+	}
+
+	utils.ResponseSuccess(c, "Rooms retrieved successfully", response)
 }
 
 // GetRoomDetails godoc
@@ -171,6 +217,45 @@ func (ah *AdminHandler) DeleteUser(c *gin.Context) {
 	}
 
 	utils.ResponseSuccess(c, "User deleted successfully", nil)
+}
+
+// UpdateUserRole godoc
+// @Summary [Admin] Update user role
+// @Description Update a user's role (Admin only)
+// @Tags admin
+// @Accept json
+// @Produce json
+// @Param user_uuid path string true "User UUID"
+// @Param body body object{role=string} true "Role data"
+// @Success 200 {object} utils.Response{data=sqlc.User}
+// @Failure 400 {object} utils.ErrorResponse
+// @Failure 403 {object} utils.ErrorResponse
+// @Failure 404 {object} utils.ErrorResponse
+// @Router /api/v1/admin/users/{user_uuid}/role [patch]
+func (ah *AdminHandler) UpdateUserRole(c *gin.Context) {
+	userID := c.Param("user_uuid")
+	if userID == "" {
+		utils.ResponseError(c, utils.NewError("user_uuid is required", utils.ErrorCodeBadRequest))
+		return
+	}
+
+	var req struct {
+		Role string `json:"role" binding:"required,oneof=Admin Member"`
+	}
+
+	if err := c.ShouldBindJSON(&req); err != nil {
+		utils.ResponseError(c, utils.NewError("invalid request body", utils.ErrorCodeBadRequest))
+		return
+	}
+
+	// Update user role
+	user, err := ah.userService.UpdateUserRole(c, userID, req.Role)
+	if err != nil {
+		utils.ResponseError(c, err)
+		return
+	}
+
+	utils.ResponseSuccess(c, "User role updated successfully", user)
 }
 
 // DeleteRoom godoc

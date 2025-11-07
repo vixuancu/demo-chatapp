@@ -39,6 +39,17 @@ func (ur *SqlUserRepository) GetAllUsers(ctx context.Context, limit, offset int3
 	})
 }
 
+func (ur *SqlUserRepository) GetTotalUsersCount(ctx context.Context) (int64, error) {
+	return ur.db.GetTotalUsersCount(ctx)
+}
+
 func (ur *SqlUserRepository) DeleteUser(ctx context.Context, userUUID uuid.UUID) error {
 	return ur.db.DeleteUser(ctx, userUUID)
+}
+
+func (ur *SqlUserRepository) UpdateUserRole(ctx context.Context, userUUID uuid.UUID, role string) (sqlc.User, error) {
+	return ur.db.UpdateUserRole(ctx, sqlc.UpdateUserRoleParams{
+		UserUuid: userUUID,
+		UserRole: role,
+	})
 }

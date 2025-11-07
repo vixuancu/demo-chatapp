@@ -27,6 +27,9 @@ LIMIT $1
 OFFSET
     $2;
 
+-- name: GetTotalRoomsCount :one
+SELECT COUNT(*) FROM rooms;
+
 -- name: GetRoomByID :one
 SELECT * FROM rooms WHERE room_id = $1;
 
@@ -82,7 +85,11 @@ SELECT
     COALESCE(lm.content, '') as last_message_content,
     COALESCE(lm.message_created_at, r.room_created_at) as last_message_time,
     COALESCE(lm.user_uuid, '00000000-0000-0000-0000-000000000000'::uuid) as last_sender_uuid,
-    u.user_fullname as last_sender_name
+    u.user_fullname as last_sender_name,
+    -- Unread count from room_read_status
+    COALESCE(rrs.unread_count, 0) as unread_count,
+    -- Member count
+    (SELECT COUNT(*) FROM room_members WHERE room_id = r.room_id) as member_count
 FROM rooms r
 INNER JOIN room_members rm ON r.room_id = rm.room_id
 LEFT JOIN LATERAL (
@@ -93,5 +100,50 @@ LEFT JOIN LATERAL (
     LIMIT 1
 ) lm ON true
 LEFT JOIN users u ON lm.user_uuid = u.user_uuid
+LEFT JOIN room_read_status rrs ON rrs.user_uuid = $1 AND rrs.room_id = r.room_id
 WHERE rm.user_uuid = $1
 ORDER BY COALESCE(lm.message_created_at, r.room_created_at) DESC;
+
+-- name: GetUnreadCount :one
+SELECT COALESCE(unread_count, 0) as unread_count
+FROM room_read_status
+WHERE user_uuid = $1 AND room_id = $2;
+
+-- name: IncrementUnreadCount :exec
+UPDATE room_read_status
+SET unread_count = unread_count + 1
+WHERE user_uuid = $1 AND room_id = $2;
+
+-- name: IncrementUnreadCountsForAllMembers :exec
+-- Increment unread count for all members except sender
+-- Creates record if not exists (UPSERT)
+INSERT INTO room_read_status (user_uuid, room_id, unread_count, last_read_at)
+SELECT rm.user_uuid, $1, 1, NOW()
+FROM room_members rm
+WHERE rm.room_id = $1 
+  AND rm.user_uuid != $2
+ON CONFLICT (user_uuid, room_id)
+DO UPDATE SET 
+    unread_count = room_read_status.unread_count + 1;
+
+-- name: MarkRoomAsRead :exec
+INSERT INTO room_read_status (user_uuid, room_id, unread_count, last_read_message_id, last_read_at)
+VALUES ($1, $2, 0, $3, NOW())
+ON CONFLICT (user_uuid, room_id) 
+DO UPDATE SET 
+    unread_count = 0,
+    last_read_message_id = EXCLUDED.last_read_message_id,
+    last_read_at = NOW();
+
+-- name: GetRoomWithMembers :one
+SELECT 
+    r.room_id,
+    r.room_code,
+    r.room_name,
+    r.room_is_direct_chat,
+    r.room_created_by,
+    r.room_created_at,
+    r.room_updated_at,
+    (SELECT COUNT(*) FROM room_members WHERE room_id = r.room_id) as member_count
+FROM rooms r
+WHERE r.room_id = $1;

@@ -156,7 +156,16 @@ func (m *Manager) removeClientSafely(client *Client) {
 
 	// Remove client
 	delete(m.clients, client.ID)
-	close(client.Send)
+
+	// ✅ Close channel safely with defer recovery
+	func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("⚠️ Recovered from panic closing channel for client %s: %v", client.ID, r)
+			}
+		}()
+		close(client.Send)
+	}()
 
 	log.Printf("🧹 Client %s unregistered (user: %s)", client.ID, userUUID)
 }
@@ -206,9 +215,16 @@ func (m *Manager) AddClientToRoom(roomID int64, client *Client) {
 			delete(roomClients, existingClient.ID)
 		}
 
-		// Close old connection
-		close(existingClient.Send)
-		existingClient.Conn.Close()
+		// Close old connection safely
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("⚠️ Recovered from panic closing existing client %s: %v", existingClient.ID, r)
+				}
+			}()
+			close(existingClient.Send)
+			existingClient.Conn.Close()
+		}()
 		delete(m.clients, existingClient.ID)
 	}
 
@@ -326,11 +342,8 @@ func (m *Manager) processBroadcastMessage(message Message) {
 	// Send to clients without holding lock
 	var failedClients []*Client
 	for _, client := range clientList {
-		select {
-		case client.Send <- data:
-			// Message sent successfully
-		default:
-			// Client channel is full or closed
+		// ✅ Use safe send with panic recovery
+		if !m.safeSendToClient(client, data) {
 			failedClients = append(failedClients, client)
 		}
 	}
@@ -338,6 +351,24 @@ func (m *Manager) processBroadcastMessage(message Message) {
 	// Clean up failed clients
 	if len(failedClients) > 0 {
 		m.RemoveFailedClients(failedClients)
+	}
+}
+
+// safeSendToClient safely sends data to client with panic recovery
+func (m *Manager) safeSendToClient(client *Client, data []byte) bool {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("⚠️ Recovered from panic sending to client %s: %v", client.ID, r)
+		}
+	}()
+
+	select {
+	case client.Send <- data:
+		return true
+	default:
+		// Client channel is full or closed
+		log.Printf("⚠️ Failed to send to client %s (channel full or closed)", client.ID)
+		return false
 	}
 }
 
@@ -458,4 +489,72 @@ func (m *Manager) GetRoomInfo(roomID int64) (map[string]*Client, bool) {
 		clientCopy[id] = client
 	}
 	return clientCopy, true
+}
+
+// GetUserConnection returns the WebSocket connection for a specific user
+// This allows broadcasting to users even if they're not in the room
+func (m *Manager) GetUserConnection(userUUID uuid.UUID) *Client {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	userUUIDStr := userUUID.String()
+
+	// Find any active connection for this user (from any room)
+	if userRooms, exists := m.userConnections[userUUIDStr]; exists {
+		for _, client := range userRooms {
+			// Return the first active connection found
+			if client != nil {
+				return client
+			}
+		}
+	}
+
+	return nil
+}
+
+// BroadcastToUsers sends message to specific list of user UUIDs
+// This is used to broadcast to ALL room members, not just online users in that room
+func (m *Manager) BroadcastToUsers(message Message, userUUIDs []uuid.UUID) int {
+	data, err := json.Marshal(message)
+	if err != nil {
+		log.Printf("❌ Error marshaling message for broadcast: %v", err)
+		return 0
+	}
+
+	sentCount := 0
+	skippedCount := 0
+
+	for _, userUUID := range userUUIDs {
+		client := m.GetUserConnection(userUUID)
+
+		if client == nil {
+			skippedCount++
+			log.Printf("⚠️ User %s not connected via WebSocket - skipping", userUUID.String())
+			continue
+		}
+
+		// Send with timeout and panic recovery to avoid blocking
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("⚠️ Recovered from panic sending to user %s: %v", userUUID.String(), r)
+					skippedCount++
+				}
+			}()
+
+			select {
+			case client.Send <- data:
+				sentCount++
+			case <-time.After(50 * time.Millisecond):
+				log.Printf("⚠️ Timeout sending to user %s", userUUID.String())
+				skippedCount++
+			default:
+				log.Printf("⚠️ User %s send buffer full - skipping", userUUID.String())
+				skippedCount++
+			}
+		}()
+	}
+
+	log.Printf("📤 Broadcast result: %d sent, %d skipped (offline/disconnected)", sentCount, skippedCount)
+	return sentCount
 }

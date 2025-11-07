@@ -25,8 +25,9 @@ func (ar *AdminRoutes) Register(r *gin.RouterGroup) {
 	adminGroup.Use(middleware.RequireAdmin())   // Then check if user is admin
 
 	// User management routes
-	adminGroup.GET("/users", ar.adminHandler.GetAllUsers)              //✅
-	adminGroup.DELETE("/users/:user_uuid", ar.adminHandler.DeleteUser) //✅
+	adminGroup.GET("/users", ar.adminHandler.GetAllUsers)                      //✅
+	adminGroup.DELETE("/users/:user_uuid", ar.adminHandler.DeleteUser)         //✅
+	adminGroup.PATCH("/users/:user_uuid/role", ar.adminHandler.UpdateUserRole) //✅
 
 	// Room management routes
 	adminGroup.GET("/rooms", ar.adminHandler.GetAllRooms)             //✅

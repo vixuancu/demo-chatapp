@@ -5,8 +5,6 @@ import (
 	"context"
 )
 
-
-
 type SqlMessageRepository struct {
 	db sqlc.Querier
 }
@@ -21,6 +19,10 @@ func (r *SqlMessageRepository) CreateMessage(ctx context.Context, params sqlc.Cr
 
 func (r *SqlMessageRepository) GetRoomMessages(ctx context.Context, params sqlc.GetRoomMessagesParams) ([]sqlc.Message, error) {
 	return r.db.GetRoomMessages(ctx, params)
+}
+
+func (r *SqlMessageRepository) GetRoomMessagesWithCursor(ctx context.Context, params sqlc.GetRoomMessagesWithCursorParams) ([]sqlc.Message, error) {
+	return r.db.GetRoomMessagesWithCursor(ctx, params)
 }
 
 func (r *SqlMessageRepository) CountRoomMessages(ctx context.Context, roomID int64) (int64, error) {

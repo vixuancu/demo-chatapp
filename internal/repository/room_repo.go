@@ -3,6 +3,7 @@ package repository
 import (
 	"chat-app/internal/db/sqlc"
 	"context"
+	"log"
 
 	"github.com/google/uuid"
 )
@@ -37,6 +38,10 @@ func (r *SqlRoomRepository) LeaveRoom(ctx context.Context, userUUID uuid.UUID, r
 
 func (r *SqlRoomRepository) GetRoomByID(ctx context.Context, roomID int64) (sqlc.Room, error) {
 	return r.db.GetRoomByID(ctx, roomID)
+}
+
+func (r *SqlRoomRepository) GetRoomWithMembers(ctx context.Context, roomID int64) (sqlc.GetRoomWithMembersRow, error) {
+	return r.db.GetRoomWithMembers(ctx, roomID)
 }
 
 func (r *SqlRoomRepository) GetRoomByCode(ctx context.Context, code string) (sqlc.Room, error) {
@@ -83,6 +88,51 @@ func (r *SqlRoomRepository) GetAllRoomsWithMemberCount(ctx context.Context, limi
 	})
 }
 
+func (r *SqlRoomRepository) GetTotalRoomsCount(ctx context.Context) (int64, error) {
+	return r.db.GetTotalRoomsCount(ctx)
+}
+
 func (r *SqlRoomRepository) DeleteRoom(ctx context.Context, roomID int64) error {
 	return r.db.DeleteRoom(ctx, roomID)
+}
+
+// Unread count methods
+func (r *SqlRoomRepository) GetUnreadCount(ctx context.Context, userUUID uuid.UUID, roomID int64) (int32, error) {
+	return r.db.GetUnreadCount(ctx, sqlc.GetUnreadCountParams{
+		UserUuid: userUUID,
+		RoomID:   roomID,
+	})
+}
+
+func (r *SqlRoomRepository) IncrementUnreadCountsForAllMembers(ctx context.Context, roomID int64, senderUUID uuid.UUID) error {
+	return r.db.IncrementUnreadCountsForAllMembers(ctx, sqlc.IncrementUnreadCountsForAllMembersParams{
+		RoomID:   roomID,
+		UserUuid: senderUUID, // Exclude sender from increment
+	})
+}
+
+func (r *SqlRoomRepository) MarkRoomAsRead(ctx context.Context, userUUID uuid.UUID, roomID int64, lastMessageID int64) error {
+	log.Printf("🔧 [Repository] MarkRoomAsRead: userUUID=%s, roomID=%d, lastMessageID=%d", userUUID, roomID, lastMessageID)
+
+	// If lastMessageID is 0, set it to NULL (no foreign key constraint violation)
+	var lastMessageIDPtr *int64
+	if lastMessageID > 0 {
+		lastMessageIDPtr = &lastMessageID
+	} else {
+		lastMessageIDPtr = nil // NULL in database
+	}
+
+	err := r.db.MarkRoomAsRead(ctx, sqlc.MarkRoomAsReadParams{
+		UserUuid:          userUUID,
+		RoomID:            roomID,
+		LastReadMessageID: lastMessageIDPtr,
+	})
+
+	if err != nil {
+		log.Printf("❌ [Repository] MarkRoomAsRead SQLC error: %v", err)
+	} else {
+		log.Printf("✅ [Repository] MarkRoomAsRead success")
+	}
+
+	return err
 }

@@ -4,6 +4,7 @@ import (
 	v1Dto "chat-app/internal/dto/v1"
 	"chat-app/internal/services/v1"
 	"chat-app/internal/utils"
+	"log"
 	"strconv"
 
 	"github.com/gin-gonic/gin"
@@ -106,6 +107,8 @@ func (rh *RoomHandler) ListRooms(c *gin.Context) {
 			RoomCreatedBy:    row.RoomCreatedBy.String(),
 			RoomCreatedAt:    row.RoomCreatedAt,
 			RoomUpdatedAt:    row.RoomUpdatedAt,
+			UnreadCount:      row.UnreadCount,
+			MemberCount:      row.MemberCount,
 		}
 
 		// Add last message if exists (check if message_id > 0 since it's not nullable)
@@ -131,12 +134,13 @@ func (rh *RoomHandler) ListRooms(c *gin.Context) {
 
 // GetRoom godoc
 // @Summary Get room details
-// @Description Get details of a specific room
+// @Description Get details of a specific room with members
 // @Tags rooms
 // @Produce json
 // @Param roomID path int true "Room ID"
-// @Success 200 {object} utils.Response{data=sqlc.Room}
+// @Success 200 {object} utils.Response{data=object}
 // @Failure 400 {object} utils.ErrorResponse
+// @Failure 403 {object} utils.ErrorResponse
 // @Failure 404 {object} utils.ErrorResponse
 // @Router /api/v1/rooms/{roomID} [get]
 func (rh *RoomHandler) GetRoom(c *gin.Context) {
@@ -147,18 +151,21 @@ func (rh *RoomHandler) GetRoom(c *gin.Context) {
 		return
 	}
 
-	// TODO: Implement GetRoomByID in service
-	// room, err := rh.roomService.GetRoomByID(c, roomID)
-	// if err != nil {
-	// 	utils.ResponseError(c, err)
-	// 	return
-	// }
+	// Get authenticated user
+	userUUID, err := utils.GetUserUUID(c)
+	if err != nil {
+		utils.ResponseError(c, utils.NewError("unauthorized", utils.ErrorCodeUnauthorized))
+		return
+	}
 
-	// Temporary response
-	utils.ResponseSuccess(c, "Room details", map[string]interface{}{
-		"room_id": roomID,
-		"message": "GetRoom not implemented yet",
-	})
+	// Get room with members
+	room, err := rh.roomService.GetRoomWithMembers(c, roomID, userUUID)
+	if err != nil {
+		utils.ResponseError(c, err)
+		return
+	}
+
+	utils.ResponseSuccess(c, "Room details retrieved successfully", room)
 }
 
 // JoinRoomByCode godoc
@@ -209,11 +216,11 @@ func (rh *RoomHandler) JoinRoomByCode(c *gin.Context) {
 
 // GetRoomMembers godoc
 // @Summary Get room members
-// @Description Get all members of a specific room
+// @Description Get all members of a specific room with total count
 // @Tags rooms
 // @Produce json
 // @Param roomID path int true "Room ID"
-// @Success 200 {object} utils.Response{data=[]sqlc.User}
+// @Success 200 {object} utils.Response{data=object{members=[]v1Dto.UserDTO,total_count=int}}
 // @Failure 400 {object} utils.ErrorResponse
 // @Failure 403 {object} utils.ErrorResponse
 // @Router /api/v1/rooms/{roomID}/members [get]
@@ -231,8 +238,16 @@ func (rh *RoomHandler) GetRoomMembers(c *gin.Context) {
 		utils.ResponseError(c, err)
 		return
 	}
-	membersRoom := v1Dto.MapUsersToDTO(members)
-	utils.ResponseSuccess(c, "Room members retrieved successfully", membersRoom)
+
+	membersDTO := v1Dto.MapUsersToDTO(members)
+
+	// Return with total count
+	response := gin.H{
+		"members":     membersDTO,
+		"total_count": len(membersDTO),
+	}
+
+	utils.ResponseSuccess(c, "Room members retrieved successfully", response)
 }
 
 // JoinRoomByID godoc
@@ -314,4 +329,63 @@ func (rh *RoomHandler) LeaveRoom(c *gin.Context) {
 	}
 
 	utils.ResponseSuccess(c, "Successfully left room", response)
+}
+
+// @Summary Mark room as read
+// @Description Reset unread count to 0 when user opens a room
+// @Tags rooms
+// @Accept json
+// @Produce json
+// @Param roomID path int true "Room ID"
+// @Param body body object{last_message_id=int64} false "Last message ID read (optional)"
+// @Success 200 {object} utils.Response{data=object{room_id=int64,message=string}}
+// @Failure 400 {object} utils.ErrorResponse
+// @Failure 403 {object} utils.ErrorResponse
+// @Router /api/v1/rooms/{roomID}/mark-read [post]
+func (rh *RoomHandler) MarkRoomAsRead(c *gin.Context) {
+	roomIDStr := c.Param("roomID")
+	roomID, err := strconv.ParseInt(roomIDStr, 10, 64)
+	if err != nil {
+		utils.ResponseError(c, utils.NewError("invalid room ID", utils.ErrorCodeBadRequest))
+		return
+	}
+
+	// Get authenticated user
+	userUUID, err := utils.GetUserUUID(c)
+	if err != nil {
+		log.Printf("❌ [MarkRoomAsRead] Failed to get user UUID: %v", err)
+		utils.ResponseError(c, utils.NewError("unauthorized", utils.ErrorCodeUnauthorized))
+		return
+	}
+
+	log.Printf("👁️ [MarkRoomAsRead] User %s marking room %d as read", userUUID, roomID)
+
+	// Parse request body (optional last_message_id)
+	var reqBody struct {
+		LastMessageID int64 `json:"last_message_id"`
+	}
+	if err := c.ShouldBindJSON(&reqBody); err != nil {
+		// If no body provided, default to 0
+		log.Printf("⚠️ [MarkRoomAsRead] No body provided, using default last_message_id=0")
+		reqBody.LastMessageID = 0
+	}
+
+	log.Printf("📝 [MarkRoomAsRead] Params: user=%s, room=%d, last_message_id=%d", userUUID, roomID, reqBody.LastMessageID)
+
+	// Mark room as read
+	err = rh.roomService.MarkRoomAsRead(c.Request.Context(), userUUID, roomID, reqBody.LastMessageID)
+	if err != nil {
+		log.Printf("❌ [MarkRoomAsRead] Service error: %v", err)
+		utils.ResponseError(c, err)
+		return
+	}
+
+	log.Printf("✅ [MarkRoomAsRead] Successfully marked room %d as read for user %s", roomID, userUUID)
+
+	response := gin.H{
+		"room_id": roomID,
+		"message": "Room marked as read",
+	}
+
+	utils.ResponseSuccess(c, "Successfully marked room as read", response)
 }

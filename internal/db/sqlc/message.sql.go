@@ -89,3 +89,46 @@ func (q *Queries) GetRoomMessages(ctx context.Context, arg GetRoomMessagesParams
 	}
 	return items, nil
 }
+
+const getRoomMessagesWithCursor = `-- name: GetRoomMessagesWithCursor :many
+SELECT message_id, room_id, user_uuid, content, message_created_at
+FROM messages
+WHERE
+    room_id = $1
+    AND ($3::bigint IS NULL OR message_id < $3)
+ORDER BY message_id DESC
+LIMIT $2
+`
+
+type GetRoomMessagesWithCursorParams struct {
+	RoomID int64  `json:"room_id"`
+	Limit  int32  `json:"limit"`
+	Cursor *int64 `json:"cursor"`
+}
+
+// Cursor-based pagination: Load messages BEFORE a specific message_id
+func (q *Queries) GetRoomMessagesWithCursor(ctx context.Context, arg GetRoomMessagesWithCursorParams) ([]Message, error) {
+	rows, err := q.db.Query(ctx, getRoomMessagesWithCursor, arg.RoomID, arg.Limit, arg.Cursor)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	items := []Message{}
+	for rows.Next() {
+		var i Message
+		if err := rows.Scan(
+			&i.MessageID,
+			&i.RoomID,
+			&i.UserUuid,
+			&i.Content,
+			&i.MessageCreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}

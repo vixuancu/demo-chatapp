@@ -122,6 +122,77 @@ func (ms *messageService) GetRoomMessagesWithUsers(ctx *gin.Context, roomID int6
 	return result, nil
 }
 
+// GetRoomMessagesWithCursor implements cursor-based pagination for better UX
+// Returns: messages, hasMore, nextCursor, error
+func (ms *messageService) GetRoomMessagesWithCursor(ctx *gin.Context, roomID int64, userUUID uuid.UUID, cursor *int64, limit int32) ([]v1Dto.MessageWithUser, bool, *int64, error) {
+	context := ctx.Request.Context()
+
+	// Check if user is member of room
+	isMember, err := ms.roomRepo.IsUserMemberOfRoom(context, userUUID, roomID)
+	if err != nil {
+		return nil, false, nil, utils.WrapError(err, "could not check room membership", utils.ErrorCodeInternalServer)
+	}
+
+	if !isMember {
+		return nil, false, nil, utils.NewError("user is not a member of this room", utils.ErrorCodeForbidden)
+	}
+
+	// Load limit+1 messages to check if there are more
+	messages, err := ms.messageRepo.GetRoomMessagesWithCursor(context, sqlc.GetRoomMessagesWithCursorParams{
+		RoomID: roomID,
+		Cursor: cursor,
+		Limit:  limit + 1, // Load 1 extra to check has_more
+	})
+
+	if err != nil {
+		return nil, false, nil, utils.WrapError(err, "could not get room messages", utils.ErrorCodeInternalServer)
+	}
+
+	// Check if has more
+	hasMore := len(messages) > int(limit)
+	if hasMore {
+		messages = messages[:limit] // Remove extra message
+	}
+
+	// Get user info for each message
+	var result []v1Dto.MessageWithUser
+	for _, msg := range messages {
+		user, err := ms.userRepo.GetUserByUUID(context, msg.UserUuid)
+		if err != nil {
+			// Skip message if user not found
+			continue
+		}
+
+		messageWithUser := v1Dto.MessageWithUser{
+			MessageID:        msg.MessageID,
+			RoomID:           msg.RoomID,
+			UserUUID:         msg.UserUuid.String(),
+			UserFullname:     user.UserFullname,
+			UserEmail:        user.UserEmail,
+			Content:          msg.Content,
+			MessageCreatedAt: msg.MessageCreatedAt,
+			IsOwn:            msg.UserUuid == userUUID,
+		}
+
+		result = append(result, messageWithUser)
+	}
+
+	// Reverse order for chronological display (oldest → newest)
+	for i := 0; i < len(result)/2; i++ {
+		j := len(result) - 1 - i
+		result[i], result[j] = result[j], result[i]
+	}
+
+	// Get next cursor (oldest message in result)
+	var nextCursor *int64
+	if len(result) > 0 {
+		oldestID := result[0].MessageID
+		nextCursor = &oldestID
+	}
+
+	return result, hasMore, nextCursor, nil
+}
+
 // CreateMessage implements MessageService interface for websocket
 func (ms *messageService) CreateMessage(ctx context.Context, params sqlc.CreateMessageParams) (sqlc.Message, error) {
 	message, err := ms.messageRepo.CreateMessage(ctx, params)

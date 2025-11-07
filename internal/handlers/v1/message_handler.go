@@ -21,13 +21,13 @@ func NewMessageHandler(messageService services.MessageService) *MessageHandler {
 
 // GetRoomMessages godoc
 // @Summary Get room messages
-// @Description Get messages from a specific room with pagination
+// @Description Get messages from a specific room with cursor-based pagination
 // @Tags messages
 // @Produce json
 // @Param roomID path int true "Room ID"
-// @Param limit query int false "Limit (default 50)"
-// @Param offset query int false "Offset (default 0)"
-// @Success 200 {object} utils.Response{data=[]sqlc.Message}
+// @Param cursor query int false "Message ID cursor (load messages before this ID)"
+// @Param limit query int false "Limit (default 50, max 100)"
+// @Success 200 {object} utils.Response{data=object{messages=[]dto.MessageWithUser,has_more=bool,next_cursor=int}}
 // @Failure 400 {object} utils.ErrorResponse
 // @Failure 403 {object} utils.ErrorResponse
 // @Router /api/v1/rooms/{roomID}/messages [get]
@@ -41,16 +41,20 @@ func (mh *MessageHandler) GetRoomMessages(c *gin.Context) {
 
 	// Parse query parameters
 	limitStr := c.DefaultQuery("limit", "50")
-	offsetStr := c.DefaultQuery("offset", "0")
+	cursorStr := c.Query("cursor") // Optional cursor
 
 	limit, err := strconv.ParseInt(limitStr, 10, 32)
 	if err != nil || limit < 1 || limit > 100 {
 		limit = 50
 	}
 
-	offset, err := strconv.ParseInt(offsetStr, 10, 32)
-	if err != nil || offset < 0 {
-		offset = 0
+	// Parse cursor (optional)
+	var cursor *int64
+	if cursorStr != "" {
+		cursorVal, err := strconv.ParseInt(cursorStr, 10, 64)
+		if err == nil {
+			cursor = &cursorVal
+		}
 	}
 
 	// Get authenticated user
@@ -66,14 +70,18 @@ func (mh *MessageHandler) GetRoomMessages(c *gin.Context) {
 		return
 	}
 
-	// Get room messages with user info
-	messages, err := mh.messageService.GetRoomMessagesWithUsers(c, roomID, userID, int32(limit), int32(offset))
+	// Get room messages with cursor-based pagination
+	messages, hasMore, nextCursor, err := mh.messageService.GetRoomMessagesWithCursor(c, roomID, userID, cursor, int32(limit))
 	if err != nil {
 		utils.ResponseError(c, err)
 		return
 	}
 
-	utils.ResponseSuccess(c, "Messages retrieved successfully", messages)
+	utils.ResponseSuccess(c, "Messages retrieved successfully", gin.H{
+		"messages":    messages,
+		"has_more":    hasMore,
+		"next_cursor": nextCursor,
+	})
 }
 
 // SendMessage godoc

@@ -93,6 +93,17 @@ func (q *Queries) GetAllUsers(ctx context.Context, arg GetAllUsersParams) ([]Use
 	return items, nil
 }
 
+const getTotalUsersCount = `-- name: GetTotalUsersCount :one
+SELECT COUNT(*) FROM users
+`
+
+func (q *Queries) GetTotalUsersCount(ctx context.Context) (int64, error) {
+	row := q.db.QueryRow(ctx, getTotalUsersCount)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const getUserByEmail = `-- name: GetUserByEmail :one
 SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at FROM users WHERE user_email = $1
 `
@@ -118,6 +129,34 @@ SELECT user_uuid, user_email, user_password, user_fullname, user_role, user_crea
 
 func (q *Queries) GetUserByUUID(ctx context.Context, userUuid uuid.UUID) (User, error) {
 	row := q.db.QueryRow(ctx, getUserByUUID, userUuid)
+	var i User
+	err := row.Scan(
+		&i.UserUuid,
+		&i.UserEmail,
+		&i.UserPassword,
+		&i.UserFullname,
+		&i.UserRole,
+		&i.UserCreatedAt,
+		&i.UserUpdatedAt,
+	)
+	return i, err
+}
+
+const updateUserRole = `-- name: UpdateUserRole :one
+UPDATE users
+SET user_role = $2,
+    user_updated_at = NOW()
+WHERE user_uuid = $1
+RETURNING user_uuid, user_email, user_password, user_fullname, user_role, user_created_at, user_updated_at
+`
+
+type UpdateUserRoleParams struct {
+	UserUuid uuid.UUID `json:"user_uuid"`
+	UserRole string    `json:"user_role"`
+}
+
+func (q *Queries) UpdateUserRole(ctx context.Context, arg UpdateUserRoleParams) (User, error) {
+	row := q.db.QueryRow(ctx, updateUserRole, arg.UserUuid, arg.UserRole)
 	var i User
 	err := row.Scan(
 		&i.UserUuid,

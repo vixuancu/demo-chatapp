@@ -13,6 +13,12 @@ type RoomWithLastMessage struct {
 
 	// Last message info
 	LastMessage *LastMessageInfo `json:"last_message,omitempty"`
+
+	// Unread count
+	UnreadCount int32 `json:"unread_count"`
+
+	// Member count
+	MemberCount int64 `json:"member_count"`
 }
 
 type LastMessageInfo struct {
