@@ -1,4 +1,4 @@
-version: '3.8'
+version: "3.8"
 
 services:
   chat-db:
@@ -15,6 +15,11 @@ services:
       - chat-app-pgdata:/var/lib/postgresql/data
     networks:
       - app-networks
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "${DB_USER}"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
   chatapp-redis:
     image: redis:8.0-alpine
     container_name: chatapp-redis
@@ -29,6 +34,34 @@ services:
       - chatapp-redis-data:/data
       - ./system/redis/redis.conf:/usr/local/etc/redis/redis.conf
     command: redis-server /usr/local/etc/redis/redis.conf
+    networks:
+      - app-networks
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  chat-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: chat-app-server
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      # Override DB connection to use Docker service names
+      DB_HOST: chat-db
+      DB_PORT: 5432
+      # Override Redis connection
+      REDIS_ADDR: chatapp-redis:6379
+    ports:
+      - "${SERVER_PORT}:${SERVER_PORT}"
+    depends_on:
+      chat-db:
+        condition: service_healthy
+      chatapp-redis:
+        condition: service_healthy
     networks:
       - app-networks
 volumes:

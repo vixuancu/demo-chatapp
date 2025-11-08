@@ -3,6 +3,7 @@ export
 MIGRATION_DIRS = internal/db/migrations
 CONN_STRING = postgresql://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=$(DB_SSLMODE)
 ENV_FILE = .env
+PROD_COMPOSE= docker-compose.yml
 # up and remove docker container
 up-container:
 	docker-compose up -d
@@ -38,9 +39,16 @@ migrate-drop:
 # apple migrations to a specific version (make migrate-goto VERSION=1) - goto này là chạy đến bao gồm phiên bản trước luôn
 migrate-goto:
 	migrate -path $(MIGRATION_DIRS) -database "$(CONN_STRING)" goto $(VERSION)
+# Build container for production
+prod:
+	docker-compose -f $(PROD_COMPOSE) down
+	docker-compose -f $(PROD_COMPOSE) --env-file $(ENV_FILE) up -d --build
+# Stop All container production
+stop-prod:
+	docker-compose -f $(PROD_COMPOSE) down
 # run server
 server:
 	go run ./cmd/api
 build:
-	go build -o bin/app ./cmd/api
+	go build -o bin/myapp ./cmd/api
 .PHONY: start-container remove-container stop-container start-container restart-container sqlc migrate-create migrate-up migrate-down migrate-down-n migrate-force migrate-drop migrate-goto server build
